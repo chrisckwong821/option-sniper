@@ -47,3 +47,44 @@ the backend performs its bounded historical refresh before opening the server.
 For public access, keep port `8765` bound to loopback and publish
 `http://127.0.0.1:8765` through a Cloudflare Tunnel. Do not cache `/api/*` or
 `/ws/*`; only static assets are suitable for edge caching.
+
+## Cloudflare Tunnel
+
+Install `cloudflared` from Cloudflare's signed package repository, then create a
+remotely managed tunnel in the Cloudflare dashboard. On the tunnel's setup page,
+copy only its Linux service-install command and run it on the EC2 host:
+
+```bash
+sudo cloudflared service install YOUR_TUNNEL_TOKEN
+sudo systemctl enable --now cloudflared
+sudo systemctl status cloudflared --no-pager
+```
+
+Treat the tunnel token as a secret. Do not put it in this repository, the
+application environment file, or a shell script.
+
+Add a published application route with the intended public hostname and this
+origin service URL:
+
+```text
+http://127.0.0.1:8765
+```
+
+After the hostname works, restrict browser WebSocket origins by adding its exact
+HTTPS origin to `/etc/sigma-tape/sigma-tape.env`:
+
+```bash
+SIGMA_ALLOWED_ORIGINS=https://tape.example.com
+```
+
+Use `sudoedit /etc/sigma-tape/sigma-tape.env` to add the setting without changing
+the file's root ownership, then recreate the backend:
+
+```bash
+cd /opt/sigma-tape/current
+revision=$(basename "$(readlink -f /opt/sigma-tape/current)")
+sudo env SIGMA_TAPE_VERSION="$revision" docker compose -f deploy/compose.yml up -d
+```
+
+Verify the public dashboard, API, and WebSocket before tightening any remaining
+AWS security-group rules. Port `8765` must remain closed to public ingress.
