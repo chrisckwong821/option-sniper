@@ -10,6 +10,7 @@ from scripts.dashboard_state import (
     atomic_write_json,
     build_mock_bundle,
     build_refresh_plan,
+    validate_bundle,
 )
 
 
@@ -98,6 +99,57 @@ class DashboardStateManagerTests(unittest.TestCase):
         persisted = json.loads(self.cache.read_text())
         self.assertNotIn("cache", persisted)
         self.assertEqual(persisted["snapshot"]["data_date"], "2026-08-27")
+
+    def test_successful_refresh_is_persisted_and_marked_fresh(self):
+        refreshed = build_mock_bundle(self.plan)
+        calls = []
+        manager = DashboardStateManager(
+            self.cache,
+            refresh=lambda plan: calls.append(plan.completed_session) or refreshed,
+        )
+
+        state = manager.ensure_state(self.plan)
+
+        self.assertEqual(calls, ["2026-08-27"])
+        self.assertEqual(state["cache"]["status"], "fresh")
+        self.assertEqual(state["cache"]["source"], "refresh")
+        self.assertTrue(self.cache.exists())
+        self.assertNotIn("cache", json.loads(self.cache.read_text()))
+
+    def test_refresh_disabled_requires_a_cache(self):
+        manager = DashboardStateManager(self.cache)
+        with self.assertRaisesRegex(RuntimeError, "cache is missing"):
+            manager.ensure_state(self.plan, mode="never")
+
+    def test_corrupt_cache_is_ignored_and_replaced(self):
+        self.cache.write_text("not json")
+        manager = DashboardStateManager(
+            self.cache,
+            refresh=lambda _: build_mock_bundle(self.plan),
+        )
+        state = manager.ensure_state(self.plan)
+        self.assertEqual(state["cache"]["source"], "refresh")
+        self.assertEqual(json.loads(self.cache.read_text())["schema_version"], "1.0")
+
+    def test_invalid_or_wrong_date_refresh_is_rejected(self):
+        invalid = build_mock_bundle(sample_plan("2026-08-26"))
+        manager = DashboardStateManager(self.cache, refresh=lambda _: invalid)
+        with self.assertRaisesRegex(RuntimeError, "target completed session"):
+            manager.ensure_state(self.plan)
+
+        empty = build_mock_bundle(self.plan)
+        empty["today"]["rows"] = []
+        with self.assertRaisesRegex(ValueError, "today payload has no rows"):
+            validate_bundle(empty)
+
+    def test_mock_mode_does_not_write_or_call_refresh(self):
+        manager = DashboardStateManager(
+            self.cache,
+            refresh=lambda _: self.fail("mock mode should not refresh"),
+        )
+        state = manager.ensure_state(self.plan, mock=True)
+        self.assertEqual(state["cache"]["status"], "mock")
+        self.assertFalse(self.cache.exists())
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from aiohttp import WSMsgType
+from aiohttp.client_exceptions import WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
 
 from scripts.dashboard_state import build_mock_bundle
@@ -57,6 +58,40 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message.type, WSMsgType.TEXT)
         self.assertEqual(message.json()["type"], "snapshot")
         await socket.close()
+
+    async def test_private_paths_and_legacy_price_api_are_not_routed(self):
+        for path in (
+            "/api/prices",
+            "/data/snapshot-state.json",
+            "/.cache/sigma-tape/dashboard-state.json",
+            "/README.md",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual((await self.client.get(path)).status, 404)
+
+    async def test_websocket_origin_allowlist_rejects_other_sites(self):
+        self.args.allowed_origin = ["https://sigma.example"]
+        client = TestClient(TestServer(create_app(
+            self.args,
+            build_mock_bundle(sample_plan()),
+        )))
+        await client.start_server()
+        try:
+            with self.assertRaises(WSServerHandshakeError) as context:
+                await client.ws_connect(
+                    "/ws/prices",
+                    headers={"Origin": "https://evil.example"},
+                )
+            self.assertEqual(context.exception.status, 403)
+
+            socket = await client.ws_connect(
+                "/ws/prices",
+                headers={"Origin": "https://sigma.example"},
+            )
+            self.assertEqual((await socket.receive(timeout=2)).type, WSMsgType.TEXT)
+            await socket.close()
+        finally:
+            await client.close()
 
 
 if __name__ == "__main__":

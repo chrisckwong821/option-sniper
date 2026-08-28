@@ -16,5 +16,22 @@ dependencies = [
   "pandas>=2.2,<4",
 ]
 
+[project.optional-dependencies]
+test = [
+  "coverage[toml]>=7.6,<9",
+]
+
 [tool.setuptools]
 packages = ["scripts"]
+
+[tool.coverage.run]
+branch = true
+source = ["scripts"]
+
+[tool.coverage.report]
+fail_under = 60
+show_missing = true
+skip_covered = true
+exclude_also = [
+  "if __name__ == .__main__.:",
+]

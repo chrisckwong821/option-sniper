@@ -55,9 +55,16 @@
     );
   }
 
+  function isCurrentAnchor(view, payloadAnchorDate, targetCompletedSession) {
+    return view !== "today"
+      || !targetCompletedSession
+      || payloadAnchorDate === targetCompletedSession;
+  }
+
   return Object.freeze({
     calculateLiveMetrics,
     calculatePriceChange,
+    isCurrentAnchor,
     isNewerPrice,
     isPriceForTradingDate,
     sessionLabel,

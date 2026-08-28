@@ -477,11 +477,11 @@ function applyLivePrice(point, tradingDate) {
 }
 
 function applyLivePriceToRow(row, point) {
-  if (
-    row.dashboard_view === "today"
-    && state.cache?.target_completed_session
-    && row.payload_anchor_date !== state.cache.target_completed_session
-  ) return false;
+  if (!window.SigmaMath.isCurrentAnchor(
+    row.dashboard_view,
+    row.payload_anchor_date,
+    state.cache?.target_completed_session,
+  )) return false;
   if (point.ts_event === row.price_timestamp) {
     row.price_stale = Boolean(point.is_stale);
     if (point.session === row.extended_session) {

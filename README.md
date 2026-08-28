@@ -29,13 +29,21 @@ Python 3.11+ and Node 22+ are required.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
+python -m pip install -e '.[test]'
 make test
+make coverage
 python -m scripts.live_price_adapter --mock
 ```
 
 Open [http://127.0.0.1:8765](http://127.0.0.1:8765). Mock mode generates
 deterministic in-memory state and does not call Databento.
+
+The automated suite covers option math and IV Reliability, exchange calendars,
+liquidity and cost guards, state refresh/fallback, HTTP and WebSocket boundaries,
+frontend live calculations, and repository hygiene. CI intentionally has no
+Databento credentials: provider calls are mocked so pushes cannot spend credits
+or fail because an external feed is unavailable. Python branch coverage is
+measured across the complete backend and must remain at or above 60%.
 
 ## Live data
 

@@ -28,6 +28,18 @@ assert.equal(
   SigmaMath.isPriceForTradingDate("2026-08-27", "2026-08-28"),
   false,
 );
+assert.equal(
+  SigmaMath.isCurrentAnchor("today", "2026-08-27", "2026-08-27"),
+  true,
+);
+assert.equal(
+  SigmaMath.isCurrentAnchor("today", "2026-08-26", "2026-08-27"),
+  false,
+);
+assert.equal(
+  SigmaMath.isCurrentAnchor("yesterday", "2026-08-26", "2026-08-27"),
+  true,
+);
 
 const fridayPremarket = SigmaMath.calculateLiveMetrics(104, 100, 2);
 assert.ok(Math.abs(fridayPremarket.zScore - (Math.log(1.04) / 0.02)) < 1e-12);
