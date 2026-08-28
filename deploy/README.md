@@ -10,16 +10,40 @@ Host-owned runtime paths:
 - `/etc/sigma-tape/sigma-tape.env`: Databento credentials, root-owned `0600`
 - `/var/lib/sigma-tape`: private dashboard and live-price cache, UID `10001`
 
-Start or update the backend from `/opt/sigma-tape`:
+The EC2 host uses immutable releases under `/opt/sigma-tape/releases/<revision>`
+and points `/opt/sigma-tape/current` at the active release. Build and start a
+release with the same revision as its image tag:
 
 ```bash
-sudo docker compose -f deploy/compose.yml build
-sudo docker compose -f deploy/compose.yml up -d
-sudo docker compose -f deploy/compose.yml ps
+revision=YOUR_COMMIT_ID
+cd "/opt/sigma-tape/releases/$revision"
+sudo env SIGMA_TAPE_VERSION="$revision" docker compose -f deploy/compose.yml build
+sudo env SIGMA_TAPE_VERSION="$revision" docker compose -f deploy/compose.yml up -d
+sudo ln -sfn "/opt/sigma-tape/releases/$revision" /opt/sigma-tape/current
+sudo env SIGMA_TAPE_VERSION="$revision" docker compose -f deploy/compose.yml ps
 curl --fail http://127.0.0.1:8765/api/health
 ```
+
+To roll back, run `docker compose up -d --no-build` from a retained release
+with `SIGMA_TAPE_VERSION` set to that release's image tag, then repoint the
+`current` link.
+
+Create the credential file once, outside the release tree:
+
+```bash
+sudo install -d -o root -g root -m 0700 /etc/sigma-tape
+sudo install -o root -g root -m 0600 /dev/null /etc/sigma-tape/sigma-tape.env
+sudoedit /etc/sigma-tape/sigma-tape.env
+```
+
+It must define `DATABENTO_LIVE_API_KEY` and `DATABENTO_OPTIONS_API_KEY`.
+Do not add either value to an image, release archive, or GitHub Actions log.
 
 The container uses `restart: unless-stopped`, so Docker restores it after a host
 reboot. The image contains no credentials or market snapshots. A mounted cache
 is accepted only when it matches the latest completed Nasdaq session; otherwise
 the backend performs its bounded historical refresh before opening the server.
+
+For public access, keep port `8765` bound to loopback and publish
+`http://127.0.0.1:8765` through a Cloudflare Tunnel. Do not cache `/api/*` or
+`/ws/*`; only static assets are suitable for edge caching.
