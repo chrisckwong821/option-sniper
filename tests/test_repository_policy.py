@@ -78,6 +78,18 @@ class RepositoryPolicyTests(unittest.TestCase):
         ):
             self.assertNotIn(variable, content)
 
+    def test_production_container_is_local_only_and_non_root(self):
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        compose = (ROOT / "deploy" / "compose.yml").read_text()
+
+        self.assertIn("USER 10001:10001", dockerfile)
+        self.assertIn('"127.0.0.1:8765:8765"', compose)
+        self.assertIn("read_only: true", compose)
+        self.assertIn("no-new-privileges:true", compose)
+        self.assertIn("max-size: 10m", compose)
+        self.assertNotIn("DATABENTO_", dockerfile)
+        self.assertNotIn("DATABENTO_", compose)
+
 
 if __name__ == "__main__":
     unittest.main()

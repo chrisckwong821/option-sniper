@@ -1,0 +1,15 @@
+.git
+.github
+.cache
+.coverage
+.env
+.env.*
+.venv
+.venv-*
+*.egg-info
+__pycache__
+tests
+artifacts
+dashboard/data
+*.dbn
+*.dbn.zst
