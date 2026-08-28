@@ -1,0 +1,11 @@
+{
+  "name": "sigma-tape",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "node tests/live-calculations.test.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

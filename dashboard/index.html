@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sigma Tape</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand-block">
+        <div class="brand-mark" aria-hidden="true">&sigma;</div>
+        <div>
+          <h1>Sigma Tape</h1>
+          <p>Nasdaq upside monitor</p>
+        </div>
+      </div>
+      <div class="session-meta">
+        <span id="status-badge" class="status-badge" data-state="snapshot">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="connection-label">Snapshot</span>
+        </span>
+        <span class="header-date"><small>Data date</small><strong id="session-date">--</strong></span>
+        <span class="header-date"><small>Last update</small><strong id="last-update">--</strong></span>
+      </div>
+    </header>
+
+    <main>
+      <section class="metrics-band" aria-label="Snapshot summary">
+        <div class="metric">
+          <span>Top signal</span>
+          <strong id="top-signal">--</strong>
+          <small id="top-ticker">No matching movers</small>
+        </div>
+        <div class="metric">
+          <span>Beyond 1&sigma;</span>
+          <strong id="outside-count">0</strong>
+          <small>In the current view</small>
+        </div>
+        <div class="metric">
+          <span>Valid IV coverage</span>
+          <strong id="coverage-count">0</strong>
+          <small id="reliability-mix">--</small>
+        </div>
+        <div class="metric">
+          <span>Price source</span>
+          <strong id="price-source">--</strong>
+          <small id="price-source-note">Closing snapshot</small>
+        </div>
+      </section>
+
+      <section class="control-band" aria-label="Mover controls">
+        <label class="search-control">
+          <span>Search</span>
+          <input id="search-input" type="search" placeholder="Ticker or company" autocomplete="off">
+        </label>
+        <label>
+          <span>Sector</span>
+          <select id="sector-filter">
+            <option value="all">All sectors</option>
+          </select>
+        </label>
+        <label>
+          <span>IV Reliability</span>
+          <select id="reliability-filter">
+            <option value="all">All levels</option>
+            <option value="high">High</option>
+            <option value="medium">Medium or better</option>
+          </select>
+        </label>
+        <div class="ranking-control">
+          <span>Rank by</span>
+          <div class="segmented" role="group" aria-label="Ranking metric">
+            <button class="rank-button active" data-sort="original_rank" type="button">Saved rank</button>
+            <button class="rank-button" data-sort="abs_z_score" type="button" hidden>Absolute Z</button>
+            <button class="rank-button" data-sort="z_score" type="button">Upside Z</button>
+            <button class="rank-button" data-sort="gain_pct" type="button">Gain</button>
+          </div>
+        </div>
+        <div class="threshold-control">
+          <span>Signal</span>
+          <div class="segmented" role="group" aria-label="Z-score threshold">
+            <button class="threshold-button active" data-threshold="all" type="button">All</button>
+            <button class="threshold-button" data-threshold="one" type="button">Above 1&sigma;</button>
+            <button class="threshold-button" data-threshold="two" type="button">Above 2&sigma;</button>
+          </div>
+        </div>
+      </section>
+
+      <nav class="table-view-tabs" role="tablist" aria-label="Mover lists">
+        <button id="tab-yesterday" class="view-button active" data-view="yesterday" role="tab" aria-selected="true" aria-controls="panel-yesterday" type="button">Yesterday's gainers</button>
+        <button id="tab-today" class="view-button" data-view="today" role="tab" aria-selected="false" aria-controls="panel-today" type="button">Today's live movers</button>
+      </nav>
+
+      <section id="panel-yesterday" class="table-section table-panel active" role="tabpanel" aria-labelledby="tab-yesterday">
+        <div class="table-heading">
+          <div>
+            <h2>Yesterday's top 20 gainers</h2>
+            <p id="method-line-yesterday">Fixed 20-name list · ranked by saved rank</p>
+          </div>
+          <span id="result-count-yesterday">0 shown</span>
+        </div>
+        <div class="table-wrap">
+          <table aria-label="Yesterday's saved top gainers">
+            <thead>
+              <tr>
+                <th class="rank-col">Rank</th>
+                <th>Company</th>
+                <th>Sector</th>
+                <th class="numeric"><button class="sort-button" data-sort="market_cap_usd" type="button">Market cap</button></th>
+                <th class="numeric"><span class="term-tip label-tip" tabindex="0" data-tooltip="Regular-session close on top. When available, the lower line shows the latest pre-market, after-hours, or overnight price and its change versus that close.">Last</span></th>
+                <th class="numeric"><button class="sort-button term-tip" data-sort="gain_pct" data-tooltip="Regular-close gain stays on top. When available, the lower value is the pre-market, after-hours, or overnight move versus that close." type="button">Gain</button></th>
+                <th class="numeric"><button class="sort-button term-tip" data-sort="sigma_1d_pct" data-tooltip="The one-day expected move from prior-close option IV: annual IV multiplied by sqrt(1/365)." type="button">1-day &sigma;</button></th>
+                <th><button class="sort-button term-tip active" data-sort="z_score" data-tooltip="Log return from the displayed return anchor divided by option-implied one-day sigma. Above 1 means the gain exceeded one expected standard deviation." type="button">Z-score</button></th>
+                <th><span class="term-tip label-tip" tabindex="0" data-tooltip="Confidence in the IV denominator. High uses several tight two-sided strikes; medium has more spread sensitivity; low is provisional.">IV Reliability</span></th>
+              </tr>
+            </thead>
+            <tbody id="mover-rows-yesterday"></tbody>
+          </table>
+          <div id="empty-state-yesterday" class="empty-state" hidden>No saved gainers match the current filters.</div>
+        </div>
+      </section>
+
+      <section id="panel-today" class="table-section table-panel" role="tabpanel" aria-labelledby="tab-today" hidden>
+        <div class="table-heading">
+          <div>
+            <h2>Today's live IV movers</h2>
+            <p id="method-line-today">Eligible IV universe · waiting for current-session prices</p>
+          </div>
+          <span id="result-count-today">0 shown</span>
+        </div>
+        <div class="table-wrap">
+          <table aria-label="Today's dynamically ranked IV movers">
+            <thead>
+              <tr>
+                <th class="rank-col">Rank</th>
+                <th>Company</th>
+                <th>Sector</th>
+                <th class="numeric"><button class="sort-button" data-sort="market_cap_usd" type="button">Market cap</button></th>
+                <th class="numeric"><span class="term-tip label-tip" tabindex="0" data-tooltip="Prior regular-session close on top. Before the open, the lower line shows the newest valid overnight or pre-market price used for today's Z-score.">Last</span></th>
+                <th class="numeric"><button class="sort-button term-tip" data-sort="gain_pct" data-tooltip="Today's move versus the prior regular close. Before 9:30 ET, the newest valid overnight or pre-market price is used." type="button">Gain</button></th>
+                <th class="numeric"><button class="sort-button term-tip" data-sort="sigma_1d_pct" data-tooltip="The one-day expected move from prior-close option IV: annual IV multiplied by sqrt(1/365)." type="button">1-day &sigma;</button></th>
+                <th><button class="sort-button term-tip active" data-sort="z_score" data-tooltip="Today's log return from the prior regular close divided by option-implied one-day sigma. Before the open, the return uses the newest valid overnight or pre-market price." type="button">Z-score</button></th>
+                <th><span class="term-tip label-tip" tabindex="0" data-tooltip="Confidence in the IV denominator. High uses several tight two-sided strikes; medium has more spread sensitivity; low is provisional.">IV Reliability</span></th>
+              </tr>
+            </thead>
+            <tbody id="mover-rows-today"></tbody>
+          </table>
+          <div id="empty-state-today" class="empty-state" hidden>No live movers match the current filters.</div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span id="anchor-note">Return anchor --</span>
+      <span id="iv-note">IV snapshot --</span>
+    </footer>
+    <div id="live-announcer" class="visually-hidden" aria-live="polite"></div>
+    <script src="live-calculations.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
