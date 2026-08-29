@@ -25,8 +25,6 @@ jobs:
       DEPLOY_HOST: ${{ secrets.EC2_HOST }}
       DEPLOY_USER: ${{ secrets.EC2_USER }}
       DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
-      SSH_KEY_PATH: ${{ runner.temp }}/option-sniper-ssh-key
-      SSH_KNOWN_HOSTS: ${{ runner.temp }}/option-sniper-known-hosts
     steps:
       - uses: actions/checkout@v7
         with:
@@ -37,11 +35,13 @@ jobs:
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
           EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
         run: |
+          key_path="$RUNNER_TEMP/option-sniper-ssh-key"
+          known_hosts="$RUNNER_TEMP/option-sniper-known-hosts"
           install -m 0700 -d "$HOME/.ssh"
-          printf '%s\n' "$EC2_SSH_KEY" > "$SSH_KEY_PATH"
-          printf '%s\n' "$EC2_KNOWN_HOSTS" > "$SSH_KNOWN_HOSTS"
-          chmod 0600 "$SSH_KEY_PATH" "$SSH_KNOWN_HOSTS"
-          ssh-keygen -y -f "$SSH_KEY_PATH" >/dev/null
+          printf '%s\n' "$EC2_SSH_KEY" > "$key_path"
+          printf '%s\n' "$EC2_KNOWN_HOSTS" > "$known_hosts"
+          chmod 0600 "$key_path" "$known_hosts"
+          ssh-keygen -y -f "$key_path" >/dev/null
 
       - name: Package tested revision
         run: |
@@ -54,12 +54,14 @@ jobs:
 
       - name: Upload and deploy
         run: |
+          key_path="$RUNNER_TEMP/option-sniper-ssh-key"
+          known_hosts="$RUNNER_TEMP/option-sniper-known-hosts"
           ssh_options=(
-            -i "$SSH_KEY_PATH"
+            -i "$key_path"
             -o BatchMode=yes
             -o IdentitiesOnly=yes
             -o StrictHostKeyChecking=yes
-            -o "UserKnownHostsFile=$SSH_KNOWN_HOSTS"
+            -o "UserKnownHostsFile=$known_hosts"
             -o ConnectTimeout=15
             -o ServerAliveInterval=15
             -o ServerAliveCountMax=4
@@ -70,4 +72,3 @@ jobs:
           ssh "${ssh_options[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
             "bash -s -- '$REVISION' '$ARCHIVE_SHA256'" \
             < deploy/ec2-deploy.sh
-
