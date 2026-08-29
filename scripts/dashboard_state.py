@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -249,6 +250,9 @@ def build_mock_bundle(plan: RefreshPlan) -> dict[str, Any]:
         number = index + 1
         price = 45.0 + number * 4.25
         sigma = 1.4 + (index % 7) * 0.32
+        prior_gain = 1.0 + index * 0.27
+        prior_z = 0.4 + index * 0.08
+        prior_close = price / (1 + prior_gain / 100)
         today_rows.append({
             "ticker": f"DEMO{number:02d}",
             "company_name": f"Demo Company {number:02d}",
@@ -257,16 +261,18 @@ def build_mock_bundle(plan: RefreshPlan) -> dict[str, Any]:
             "company_description": "Deterministic development-only market data.",
             "market_cap_usd": 2_500_000_000 + index * 1_250_000_000,
             "anchor_price": price,
+            "prior_close_price": prior_close,
+            "live_anchor_price": price,
             "last_price": price,
-            "gain_pct": 0.0,
-            "log_return_pct": 0.0,
-            "z_score": 0.0,
+            "gain_pct": prior_gain,
+            "log_return_pct": 100 * math.log(price / prior_close),
+            "z_score": prior_z,
             "sigma_1d_pct": sigma,
             "annualized_implied_vol_pct": sigma * (365 ** 0.5),
             "iv_reliability": reliabilities[index % len(reliabilities)],
-            "outside_one_sigma": False,
-            "prior_session_gain_pct": 1.0 + index * 0.27,
-            "prior_session_z_score": 0.4 + index * 0.08,
+            "outside_one_sigma": abs(prior_z) > 1,
+            "prior_session_gain_pct": prior_gain,
+            "prior_session_z_score": prior_z,
         })
 
     reliability_mix = {

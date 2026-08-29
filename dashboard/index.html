@@ -42,11 +42,6 @@
           <strong id="coverage-count">0</strong>
           <small id="reliability-mix">--</small>
         </div>
-        <div class="metric">
-          <span>Price source</span>
-          <strong id="price-source">--</strong>
-          <small id="price-source-note">Closing snapshot</small>
-        </div>
       </section>
 
       <section class="control-band" aria-label="Mover controls">
@@ -138,7 +133,7 @@
                 <th>Sector</th>
                 <th class="numeric"><button class="sort-button" data-sort="market_cap_usd" type="button">Market cap</button></th>
                 <th class="numeric"><span class="term-tip label-tip" tabindex="0" data-tooltip="Prior regular-session close on top. Before the open, the lower line shows the newest valid overnight or pre-market price used for today's Z-score.">Last</span></th>
-                <th class="numeric"><button class="sort-button term-tip" data-sort="gain_pct" data-tooltip="Today's move versus the prior regular close. Before 9:30 ET, the newest valid overnight or pre-market price is used." type="button">Gain</button></th>
+                <th class="numeric"><button class="sort-button term-tip" data-sort="gain_pct" data-tooltip="The latest completed session's close-to-close move. Once the next session trades, this updates versus that completed close; pre-market and overnight moves appear separately." type="button">Gain</button></th>
                 <th class="numeric"><button class="sort-button term-tip" data-sort="sigma_1d_pct" data-tooltip="The one-day expected move from prior-close option IV: annual IV multiplied by sqrt(1/365)." type="button">1-day &sigma;</button></th>
                 <th><button class="sort-button term-tip active" data-sort="z_score" data-tooltip="Today's log return from the prior regular close divided by option-implied one-day sigma. Before the open, the return uses the newest valid overnight or pre-market price." type="button">Z-score</button></th>
                 <th><span class="term-tip label-tip" tabindex="0" data-tooltip="Confidence in the IV denominator. High uses several tight two-sided strikes; medium has more spread sensitivity; low is provisional.">IV Reliability</span></th>

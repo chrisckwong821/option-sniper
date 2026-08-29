@@ -23,8 +23,10 @@ class IvUniverseSnapshotTests(unittest.TestCase):
                     "industry": "Software",
                     "market_cap_usd": 5_000_000_000,
                     "option_status": "valid_iv",
+                    "anchor_price": 100.0,
                     "end_close": 105.0,
                     "weekly_return_pct": 5.0,
+                    "weekly_log_return_pct": 4.879016416943205,
                     "realized_horizon_implied_z": 1.2,
                     "realized_horizon_implied_sigma_pct": 2.5,
                     "annualized_implied_vol_pct": 47.0,
@@ -39,7 +41,11 @@ class IvUniverseSnapshotTests(unittest.TestCase):
         self.assertEqual(payload["valid_iv_coverage"], 1)
         self.assertEqual(payload["rows"][0]["ticker"], "AAA")
         self.assertEqual(payload["rows"][0]["anchor_price"], 105.0)
-        self.assertEqual(payload["rows"][0]["z_score"], 0.0)
+        self.assertEqual(payload["rows"][0]["prior_close_price"], 100.0)
+        self.assertEqual(payload["rows"][0]["live_anchor_price"], 105.0)
+        self.assertEqual(payload["rows"][0]["gain_pct"], 5.0)
+        self.assertEqual(payload["rows"][0]["z_score"], 1.2)
+        self.assertTrue(payload["rows"][0]["outside_one_sigma"])
         self.assertEqual(payload["live_calculation"]["ranking"], "absolute live z-score")
 
 

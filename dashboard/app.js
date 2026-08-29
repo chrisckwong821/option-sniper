@@ -21,7 +21,6 @@ const state = {
     dataDate: null,
     marketSession: "snapshot",
     pricesReceived: 0,
-    sources: new Set(),
   },
   renderQueued: false,
 };
@@ -55,8 +54,6 @@ const elements = {
   outsideCount: document.querySelector("#outside-count"),
   coverageCount: document.querySelector("#coverage-count"),
   reliabilityMix: document.querySelector("#reliability-mix"),
-  priceSource: document.querySelector("#price-source"),
-  priceSourceNote: document.querySelector("#price-source-note"),
   anchorNote: document.querySelector("#anchor-note"),
   ivNote: document.querySelector("#iv-note"),
   announcer: document.querySelector("#live-announcer"),
@@ -259,7 +256,9 @@ function gainStackMarkup(row) {
     ? Number(row.saved_gain_pct ?? row.snapshot_gain_pct ?? row.gain_pct)
     : Number(row.regular_gain_pct ?? row.snapshot_gain_pct ?? row.gain_pct);
   const regularDirection = regularGain >= 0 ? "positive" : "negative";
-  const regularLabel = isSavedList ? "Saved gain" : "Today's move";
+  const regularLabel = isSavedList
+    ? "Saved gain"
+    : row.regular_is_live ? "Today's move" : "Prior day";
   const priceState = extendedPriceState(row);
   let extendedMarkup = "";
 
@@ -286,8 +285,8 @@ function rowMarkup(row, viewRank) {
   const width = Math.min(100, Math.max(2, (Math.abs(row.z_score) / 4) * 100));
   const reliability = escapeHtml(row.iv_reliability);
   const direction = row.gain_pct >= 0 ? "positive" : "negative";
-  const sourceTitle = row.price_source
-    ? `${row.price_source} · ${formatUpdate(row.price_timestamp)}`
+  const priceTitle = row.price_timestamp
+    ? `Updated ${formatUpdate(row.price_timestamp)}`
     : "Saved closing snapshot";
   return `
     <tr class="${row.z_score > 1 ? "signal-row" : ""}">
@@ -299,7 +298,7 @@ function rowMarkup(row, viewRank) {
       </td>
       <td>${escapeHtml(row.sector)}</td>
       <td><span class="number">${formatMarketCap(row.market_cap_usd)}</span></td>
-      <td class="price-cell" title="${escapeHtml(sourceTitle)}">
+      <td class="price-cell" title="${escapeHtml(priceTitle)}">
         ${priceStackMarkup(row)}
       </td>
       <td>${gainStackMarkup(row)}</td>
@@ -390,7 +389,6 @@ function render() {
   const rows = renderTable(state.view);
   const top = rows[0];
   const mix = payload.reliability_mix || {};
-  const liveMode = state.live.pricesReceived > 0;
   const liveTimestamp = latestVisibleTimestamp(payload.rows);
   const outsideCount = rows.filter((row) => (
     state.view === "today" ? Math.abs(row.z_score) > 1 : row.z_score > 1
@@ -402,10 +400,6 @@ function render() {
   elements.outsideCount.textContent = outsideCount;
   elements.coverageCount.textContent = payload.valid_iv_coverage;
   elements.reliabilityMix.textContent = `${mix.high || 0} high / ${mix.medium || 0} medium / ${mix.low || 0} low`;
-  elements.priceSource.textContent = liveMode ? "Live blend" : payload.price_source;
-  elements.priceSourceNote.textContent = liveMode
-    ? [...state.live.sources].sort().join(" / ") || "Adapter stream"
-    : state.cache?.status === "stale" ? "Stale cached snapshot" : "Closing snapshot";
   elements.sessionDate.textContent = formatDate(state.live.dataDate || payload.data_date);
   elements.lastUpdate.textContent = formatUpdate(liveTimestamp || payload.last_update_utc);
   elements.anchorNote.textContent = state.view === "today"
@@ -524,7 +518,6 @@ function applyLivePriceToRow(row, point) {
     row.extended_source = point.source_dataset;
     row.extended_stale = Boolean(point.is_stale);
   }
-  state.live.sources.add(point.source_dataset);
   return true;
 }
 

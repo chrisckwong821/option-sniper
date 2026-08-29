@@ -162,7 +162,7 @@ h1 {
 
 .metrics-band {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
@@ -784,8 +784,9 @@ footer {
     border-right: 0;
   }
 
-  .metric:nth-child(3),
-  .metric:nth-child(4) {
+  .metric:nth-child(3) {
+    grid-column: 1 / -1;
+    border-right: 0;
     border-bottom: 0;
   }
 
