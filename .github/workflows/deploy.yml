@@ -1,0 +1,73 @@
+name: Deploy production
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: option-sniper-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.EC2_HOST }}
+      DEPLOY_USER: ${{ secrets.EC2_USER }}
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+      SSH_KEY_PATH: ${{ runner.temp }}/option-sniper-ssh-key
+      SSH_KNOWN_HOSTS: ${{ runner.temp }}/option-sniper-known-hosts
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Configure trusted SSH access
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+        run: |
+          install -m 0700 -d "$HOME/.ssh"
+          printf '%s\n' "$EC2_SSH_KEY" > "$SSH_KEY_PATH"
+          printf '%s\n' "$EC2_KNOWN_HOSTS" > "$SSH_KNOWN_HOSTS"
+          chmod 0600 "$SSH_KEY_PATH" "$SSH_KNOWN_HOSTS"
+          ssh-keygen -y -f "$SSH_KEY_PATH" >/dev/null
+
+      - name: Package tested revision
+        run: |
+          revision="${DEPLOY_SHA:0:8}"
+          archive="option-sniper-${revision}.tar.gz"
+          git archive --format=tar.gz --output="$RUNNER_TEMP/$archive" "$DEPLOY_SHA"
+          checksum=$(sha256sum "$RUNNER_TEMP/$archive" | awk '{print $1}')
+          printf 'REVISION=%s\nARCHIVE=%s\nARCHIVE_SHA256=%s\n' \
+            "$revision" "$archive" "$checksum" >> "$GITHUB_ENV"
+
+      - name: Upload and deploy
+        run: |
+          ssh_options=(
+            -i "$SSH_KEY_PATH"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o "UserKnownHostsFile=$SSH_KNOWN_HOSTS"
+            -o ConnectTimeout=15
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=4
+          )
+          scp "${ssh_options[@]}" \
+            "$RUNNER_TEMP/$ARCHIVE" \
+            "$DEPLOY_USER@$DEPLOY_HOST:/tmp/$ARCHIVE"
+          ssh "${ssh_options[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "bash -s -- '$REVISION' '$ARCHIVE_SHA256'" \
+            < deploy/ec2-deploy.sh
+

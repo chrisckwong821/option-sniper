@@ -90,6 +90,23 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.assertNotIn("DATABENTO_", dockerfile)
         self.assertNotIn("DATABENTO_", compose)
 
+    def test_production_deployment_requires_ci_main_and_trusted_ssh(self):
+        workflow = (ROOT / ".github" / "workflows" / "deploy.yml").read_text()
+        deploy_script = (ROOT / "deploy" / "ec2-deploy.sh").read_text()
+
+        self.assertIn("workflow_run:", workflow)
+        self.assertIn("workflow_run.conclusion == 'success'", workflow)
+        self.assertIn("workflow_run.head_branch == 'main'", workflow)
+        self.assertIn("workflow_run.event == 'push'", workflow)
+        self.assertIn("environment: production", workflow)
+        self.assertIn("StrictHostKeyChecking=yes", workflow)
+        self.assertIn("secrets.EC2_SSH_KEY", workflow)
+        self.assertIn("secrets.EC2_KNOWN_HOSTS", workflow)
+        self.assertNotIn("DATABENTO_", workflow)
+        self.assertIn("sha256sum", deploy_script)
+        self.assertIn("rollback", deploy_script)
+        self.assertIn("<title>Option Sniper</title>", deploy_script)
+
 
 if __name__ == "__main__":
     unittest.main()

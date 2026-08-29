@@ -88,3 +88,21 @@ sudo env SIGMA_TAPE_VERSION="$revision" docker compose -f deploy/compose.yml up 
 
 Verify the public dashboard, API, and WebSocket before tightening any remaining
 AWS security-group rules. Port `8765` must remain closed to public ingress.
+
+## Automated deployment
+
+`.github/workflows/deploy.yml` runs only after the `CI` workflow succeeds for a
+push to `main`. It deploys the exact tested commit with `deploy/ec2-deploy.sh`.
+The script validates the archive checksum, preserves immutable releases, waits
+up to 15 minutes for startup, and restores the prior release if health checks
+fail.
+
+The GitHub `production` environment must define these encrypted secrets:
+
+- `EC2_HOST`: EC2 hostname or IP address.
+- `EC2_USER`: SSH login user.
+- `EC2_SSH_KEY`: private deployment key.
+- `EC2_KNOWN_HOSTS`: pinned OpenSSH host-key line for `EC2_HOST`.
+
+Historical and live Databento keys remain in
+`/etc/sigma-tape/sigma-tape.env`; they are not GitHub deployment secrets.

@@ -48,6 +48,11 @@ Databento credentials: provider calls are mocked so pushes cannot spend credits
 or fail because an external feed is unavailable. Python branch coverage is
 measured across the complete backend and must remain at or above 60%.
 
+Successful `main` pushes deploy automatically after CI passes. The production
+workflow packages the exact tested commit, verifies its checksum on EC2, builds
+a versioned image, waits for both API and frontend health checks, and rolls back
+to the prior release on failure. Databento credentials remain only on EC2.
+
 ## Live data
 
 Set credentials in the environment or an EC2 secret mechanism. Never put them
