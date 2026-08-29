@@ -54,7 +54,7 @@ class RefreshSettings:
     daily_notional_min: float = 25_000_000
     candidate_target: int = 300
     result_limit: int = 20
-    spot_dataset: str = "EQUS.MINI"
+    spot_dataset: str = "EQUS.SUMMARY"
     max_spot_cost: float = 1.0
     max_option_cost: float = 5.0
 

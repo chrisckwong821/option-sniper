@@ -10,11 +10,13 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
+from databento.common.error import BentoServerError
 
 from scripts.nasdaq_universe_movers import (
     black76_straddle,
     build_spot_candidates,
     estimate_option_iv,
+    fetch_option_pairs,
     fetch_spot,
     implied_total_vol,
     is_comparable_stock,
@@ -177,6 +179,65 @@ class UniverseFilterTests(unittest.TestCase):
                     "EQUS.MINI",
                     1.0,
                 )
+        client.timeseries.get_range.assert_not_called()
+
+    def test_summary_spot_uses_consolidated_daily_bars(self):
+        frame = pd.DataFrame([{
+            "ts_event": pd.Timestamp("2026-08-28", tz="UTC"),
+            "symbol": "TSEM",
+            "open": 219.36,
+            "high": 220.5695,
+            "low": 206.9099,
+            "close": 208.01,
+            "volume": 1_250_752,
+        }]).set_index("ts_event")
+        client = MagicMock()
+        client.metadata.get_cost.return_value = 0
+        client.timeseries.get_range.return_value.to_df.return_value = frame
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            history, cost, schema = fetch_spot(
+                client,
+                ["TSEM"],
+                "2026-08-28",
+                "2026-08-29",
+                "EQUS.SUMMARY",
+                1.0,
+            )
+
+        self.assertEqual(schema, "ohlcv-1d")
+        self.assertEqual(cost, 0)
+        self.assertEqual(history.loc[0, "volume"], 1_250_752)
+        self.assertEqual(str(history.loc[0, "date"]), "2026-08-28")
+        request = client.timeseries.get_range.call_args.kwargs
+        self.assertEqual(request["dataset"], "EQUS.SUMMARY")
+        self.assertEqual(request["schema"], "ohlcv-1d")
+
+    def test_option_cost_preflight_splits_gateway_timeouts(self):
+        client = MagicMock()
+        client.metadata.get_cost.side_effect = [
+            BentoServerError(504),
+            0.6,
+            0.7,
+        ]
+        candidates = [{"ticker": ticker} for ticker in ("AAA", "BBB", "CCC", "DDD")]
+
+        with tempfile.TemporaryDirectory() as directory:
+            with contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(RuntimeError, "exceeds --max-option-cost"):
+                    fetch_option_pairs(
+                        client,
+                        candidates,
+                        "2026-08-27T15:59:00-04:00",
+                        "2026-08-27T16:00:01-04:00",
+                        date(2026, 9, 4),
+                        max_cost=1.0,
+                        known_cost=None,
+                        chunk_size=4,
+                        cache_dir=Path(directory),
+                    )
+
+        self.assertEqual(client.metadata.get_cost.call_count, 3)
         client.timeseries.get_range.assert_not_called()
 
 

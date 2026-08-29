@@ -7,6 +7,7 @@ from pathlib import Path
 from scripts.dashboard_state import (
     DashboardStateManager,
     RefreshPlan,
+    RefreshSettings,
     atomic_write_json,
     build_mock_bundle,
     build_refresh_plan,
@@ -29,6 +30,9 @@ def sample_plan(completed_session: str = "2026-08-27") -> RefreshPlan:
 
 
 class RefreshPlanTests(unittest.TestCase):
+    def test_refresh_uses_consolidated_daily_liquidity_by_default(self):
+        self.assertEqual(RefreshSettings().spot_dataset, "EQUS.SUMMARY")
+
     def test_friday_premarket_uses_thursday_as_completed_session(self):
         plan = build_refresh_plan(datetime(2026, 8, 28, 12, 0, tzinfo=UTC))
         self.assertEqual(plan.completed_session, "2026-08-27")

@@ -596,7 +596,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--spot-dataset",
         choices=("EQUS.MINI", "EQUS.SUMMARY"),
-        default="EQUS.MINI",
+        default="EQUS.SUMMARY",
+        help="Historical dataset used for completed-session prices and liquidity.",
     )
     parser.add_argument("--max-spot-cost", type=float, default=1.0)
     parser.add_argument("--max-option-cost", type=float, default=5.0)

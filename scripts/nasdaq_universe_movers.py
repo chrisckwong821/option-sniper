@@ -297,13 +297,31 @@ def fetch_option_pairs(
         }), flush=True)
         cost_source = "explicit_prior_preflight"
     else:
+        def estimate_chunk_cost(chunk_parents, chunk_label):
+            try:
+                return float(client.metadata.get_cost(
+                    **request_base,
+                    symbols=chunk_parents,
+                ))
+            except BentoServerError as exc:
+                if "504" not in str(exc) or len(chunk_parents) <= 1:
+                    raise
+                midpoint = math.ceil(len(chunk_parents) / 2)
+                print(json.dumps({
+                    "stage": "option_cost_chunk_split_after_504",
+                    "chunk": chunk_label,
+                    "parent_symbol_count": len(chunk_parents),
+                    "child_sizes": [midpoint, len(chunk_parents) - midpoint],
+                }), flush=True)
+                return (
+                    estimate_chunk_cost(chunk_parents[:midpoint], f"{chunk_label}.1")
+                    + estimate_chunk_cost(chunk_parents[midpoint:], f"{chunk_label}.2")
+                )
+
         chunk_costs = []
         for chunk_number, chunk_candidates in enumerate(chunks, start=1):
             chunk_parents = [f"{row['ticker']}.OPT" for row in chunk_candidates]
-            chunk_cost = float(client.metadata.get_cost(
-                **request_base,
-                symbols=chunk_parents,
-            ))
+            chunk_cost = estimate_chunk_cost(chunk_parents, str(chunk_number))
             chunk_costs.append(chunk_cost)
             print(json.dumps({
                 "stage": "option_chunk_cost_preflight",

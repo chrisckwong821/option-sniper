@@ -20,10 +20,11 @@ existing caches, secrets, and EC2 releases remain compatible.
 - `dashboard/app.js` applies incoming prices and computes gain and Z-score in
   the browser. A stale anchor is never used for the dynamic ranking.
 
-The historical screen routes spot and live equity access through
-`DATABENTO_LIVE_API_KEY`; historical OPRA access uses
-`DATABENTO_OPTIONS_API_KEY`. The IV denominator is a prior-close option
-snapshot, not historical volatility.
+The historical screen uses consolidated `EQUS.SUMMARY` daily bars for closing
+prices, volume, and the daily-notional liquidity gate. Live equity prices remain
+on `EQUS.MINI`. Both route through `DATABENTO_LIVE_API_KEY`; historical OPRA
+access uses `DATABENTO_OPTIONS_API_KEY`. The IV denominator is a prior-close
+option snapshot, not historical volatility.
 
 ## Local development
 
