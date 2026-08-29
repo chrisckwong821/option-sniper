@@ -73,6 +73,30 @@ class DashboardStateManagerTests(unittest.TestCase):
         self.assertEqual(state["cache"]["status"], "fresh")
         self.assertEqual(state["cache"]["source"], "cache")
 
+    def test_legacy_cache_restores_completed_session_move(self):
+        bundle = build_mock_bundle(self.plan)
+        expected = bundle["today"]["rows"][0]
+        expected_gain = expected["prior_session_gain_pct"]
+        expected_z = expected["prior_session_z_score"]
+        expected["gain_pct"] = 0.0
+        expected["log_return_pct"] = 0.0
+        expected["z_score"] = 0.0
+        expected["outside_one_sigma"] = False
+        expected.pop("live_anchor_price")
+        expected.pop("prior_close_price")
+        atomic_write_json(self.cache, bundle)
+
+        state = DashboardStateManager(
+            self.cache,
+            refresh=lambda _: self.fail("fresh cache should not refresh"),
+        ).ensure_state(self.plan)
+        restored = state["today"]["rows"][0]
+
+        self.assertEqual(restored["gain_pct"], expected_gain)
+        self.assertEqual(restored["z_score"], expected_z)
+        self.assertEqual(restored["live_anchor_price"], restored["anchor_price"])
+        self.assertGreater(restored["prior_close_price"], 0)
+
     def test_stale_cache_is_fallback_when_refresh_fails(self):
         old_plan = sample_plan("2026-08-26")
         atomic_write_json(self.cache, build_mock_bundle(old_plan))

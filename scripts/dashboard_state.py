@@ -143,6 +143,30 @@ def validate_bundle(bundle: Any) -> dict[str, Any]:
     return bundle
 
 
+def hydrate_completed_session_metrics(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Upgrade cached live-universe rows created before completed moves were shown."""
+    for row in bundle["today"]["rows"]:
+        live_anchor = row.get("live_anchor_price") or row.get("anchor_price")
+        if live_anchor:
+            row.setdefault("live_anchor_price", live_anchor)
+
+        prior_gain = row.get("prior_session_gain_pct")
+        prior_z = row.get("prior_session_z_score")
+        if prior_gain is None or prior_z is None:
+            continue
+
+        gain = float(prior_gain)
+        z_score = float(prior_z)
+        if live_anchor and gain > -100:
+            row.setdefault("prior_close_price", float(live_anchor) / (1 + gain / 100))
+        if float(row.get("gain_pct") or 0) == 0 and float(row.get("z_score") or 0) == 0:
+            row["gain_pct"] = gain
+            row["log_return_pct"] = 100 * math.log1p(gain / 100)
+            row["z_score"] = z_score
+            row["outside_one_sigma"] = abs(z_score) > 1
+    return bundle
+
+
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -351,7 +375,9 @@ class DashboardStateManager:
         if not self.cache_path.exists():
             return None
         try:
-            return validate_bundle(json.loads(self.cache_path.read_text()))
+            return hydrate_completed_session_metrics(
+                validate_bundle(json.loads(self.cache_path.read_text()))
+            )
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return None
 
@@ -397,7 +423,7 @@ class DashboardStateManager:
             raise RuntimeError("Dashboard state cache is missing and refresh is disabled")
 
         try:
-            refreshed = validate_bundle(self.refresh(plan))
+            refreshed = hydrate_completed_session_metrics(validate_bundle(self.refresh(plan)))
             if refreshed["snapshot"].get("data_date") != plan.completed_session:
                 raise ValueError("Refresh did not produce the target completed session")
             atomic_write_json(self.cache_path, refreshed)
