@@ -51,6 +51,7 @@ if [[ ! -f "$release/.release-revision" ]] || \
   sudo mv "$staging" "$release"
   staging=""
 fi
+sudo chmod 0755 "$release"
 
 rollback() {
   if [[ -z "$previous" || ! -d "$previous" || "$previous" == "$release" ]]; then
@@ -98,4 +99,3 @@ sudo ln -sfn "$release" "$current_link"
 sudo docker inspect --format \
   'deployed image={{.Config.Image}} status={{.State.Status}} health={{.State.Health.Status}} restarts={{.RestartCount}}' \
   sigma-tape
-
