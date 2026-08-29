@@ -771,23 +771,17 @@ footer {
   }
 
   .metrics-band {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .metric {
     min-height: 84px;
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--line);
+    padding: 14px 10px;
+    border-bottom: 0;
   }
 
   .metric:nth-child(2) {
-    border-right: 0;
-  }
-
-  .metric:nth-child(3) {
-    grid-column: 1 / -1;
-    border-right: 0;
-    border-bottom: 0;
+    border-right: 1px solid var(--line);
   }
 
   .metric strong {
