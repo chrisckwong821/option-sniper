@@ -3,9 +3,9 @@ requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sigma-tape"
+name = "option-sniper"
 version = "0.1.0"
-description = "Live Nasdaq option-implied Z-score dashboard"
+description = "Live option-implied sigma-adjusted mover dashboard"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

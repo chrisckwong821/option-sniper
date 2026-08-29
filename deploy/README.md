@@ -1,6 +1,6 @@
 # EC2 runtime
 
-Sigma Tape runs as a non-root Docker container and binds only to the EC2
+Option Sniper runs as a non-root Docker container and binds only to the EC2
 loopback interface. A reverse proxy or Cloudflare Tunnel should be the only
 public path to the service.
 

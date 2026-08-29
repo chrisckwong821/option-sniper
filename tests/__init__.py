@@ -1,1 +1,1 @@
-"""Sigma Tape test suite."""
+"""Option Sniper test suite."""

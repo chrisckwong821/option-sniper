@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve Sigma Tape and adapt Databento live sockets to a browser WebSocket."""
+"""Serve Option Sniper and adapt Databento live sockets to a browser WebSocket."""
 
 from __future__ import annotations
 
@@ -546,7 +546,7 @@ def create_app(
             with contextlib.suppress(Exception):
                 await client.close(
                     code=1001,
-                    message=b"Sigma Tape adapter is shutting down",
+                    message=b"Option Sniper adapter is shutting down",
                 )
         store.clients.clear()
         tasks = app[TASKS_KEY]
@@ -621,7 +621,7 @@ def main() -> None:
         create_app(args),
         host=args.host,
         port=args.port,
-        print=lambda message: print(message.replace("======== Running on", "Sigma Tape running on")),
+        print=lambda message: print(message.replace("======== Running on", "Option Sniper running on")),
     )
 
 

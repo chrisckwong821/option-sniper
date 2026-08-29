@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build, validate, and atomically cache Sigma Tape dashboard state."""
+"""Build, validate, and atomically cache Option Sniper dashboard state."""
 
 from __future__ import annotations
 

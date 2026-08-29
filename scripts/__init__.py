@@ -1,1 +1,1 @@
-"""Sigma Tape backend modules."""
+"""Option Sniper backend modules."""

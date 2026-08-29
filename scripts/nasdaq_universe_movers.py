@@ -773,7 +773,7 @@ def resolve_run_config(args):
             f"{window_end} 16:00:00", tz="America/New_York"
         ).isoformat(),
         "option_cache_dir": args.option_cache_dir or Path(
-            f"/private/tmp/sigma-tape-opra-{window_start}-open"
+            f"/private/tmp/option-sniper-opra-{window_start}-open"
         ),
     }
 

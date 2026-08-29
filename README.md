@@ -1,10 +1,13 @@
-# Sigma Tape
+# Option Sniper
 
-Sigma Tape is a dark, live Nasdaq mover dashboard. It ranks a saved list of the
-latest completed session's gainers and a broader current-session universe using
-option-implied one-day sigma and live Databento prices.
+Option Sniper is a dark, live sigma-adjusted mover monitor. It ranks a saved
+list of the latest completed Nasdaq session's gainers and a broader
+current-session universe using option-implied one-day sigma and live Databento
+prices.
 
 The project is standalone, and generated market snapshots are never committed.
+Legacy `sigma-tape` runtime paths and environment-variable names are retained so
+existing caches, secrets, and EC2 releases remain compatible.
 
 ## Architecture
 
