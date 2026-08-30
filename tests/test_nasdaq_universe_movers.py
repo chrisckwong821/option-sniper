@@ -13,6 +13,7 @@ import pandas as pd
 from databento.common.error import BentoServerError
 
 from scripts.nasdaq_universe_movers import (
+    RISK_FREE_RATE,
     black76_straddle,
     build_spot_candidates,
     estimate_option_iv,
@@ -28,11 +29,18 @@ from scripts.nasdaq_universe_movers import (
 )
 
 
-def option_pair(strike, total_vol=0.0282842712474619, spread=0.04):
+def option_pair(
+    strike,
+    total_vol=0.0282842712474619,
+    spread=0.04,
+    year_fraction=2 / 365,
+):
     forward = 100.0
-    straddle = black76_straddle(forward, strike, total_vol)
-    call_mid = 0.5 * (straddle + forward - strike)
-    put_mid = 0.5 * (straddle - forward + strike)
+    discount_factor = math.exp(-RISK_FREE_RATE * year_fraction)
+    straddle = black76_straddle(forward, strike, total_vol, discount_factor)
+    parity = discount_factor * (forward - strike)
+    call_mid = 0.5 * (straddle + parity)
+    put_mid = 0.5 * (straddle - parity)
 
     def quote(mid):
         return {
@@ -253,10 +261,49 @@ class OptionMathTests(unittest.TestCase):
 
     def test_black76_inversion_round_trip(self):
         expected_total_vol = 0.18
-        straddle = black76_straddle(102.0, 100.0, expected_total_vol)
-        actual = implied_total_vol(102.0, 100.0, straddle)
+        discount_factor = math.exp(-RISK_FREE_RATE * 14 / 365)
+        straddle = black76_straddle(102.0, 100.0, expected_total_vol, discount_factor)
+        actual = implied_total_vol(102.0, 100.0, straddle, discount_factor)
         self.assertAlmostEqual(actual, expected_total_vol, places=10)
-        self.assertIsNone(implied_total_vol(100, 100, 0))
+        self.assertIsNone(implied_total_vol(100, 100, 0, discount_factor))
+
+    def test_amzn_snapshot_uses_four_percent_discount_rate(self):
+        def pair(strike, call_mid, put_mid, call_spread, put_spread):
+            def quote(mid, spread):
+                return {
+                    "bid": mid - spread / 2,
+                    "ask": mid + spread / 2,
+                    "mid": mid,
+                    "spread": spread,
+                    "raw_symbol": "AMZN synthetic regression quote",
+                }
+
+            return {
+                "strike": strike,
+                "call": quote(call_mid, call_spread),
+                "put": quote(put_mid, put_spread),
+            }
+
+        pairs = [
+            pair(255.0, 4.975, 3.45, 0.25, 0.20),
+            pair(257.5, 3.65, 4.70, 0.20, 0.20),
+            pair(252.5, 6.50, 2.48, 0.30, 0.16),
+            pair(260.0, 2.675, 6.175, 0.13, 0.25),
+            pair(250.0, 8.325, 1.725, 0.45, 0.13),
+            pair(262.5, 1.90, 7.80, 0.08, 0.50),
+            pair(247.5, 10.275, 1.17, 0.55, 0.10),
+            pair(265.0, 1.325, 9.80, 0.05, 0.40),
+            pair(245.0, 12.40, 0.80, 0.60, 0.06),
+        ]
+        amzn = candidate("AMZN", 266.43)
+        amzn["anchor_price"] = 256.26
+
+        estimate = estimate_option_iv(amzn, pairs, 8 / 365)
+
+        self.assertAlmostEqual(estimate["risk_free_rate_pct"], 4.0)
+        self.assertAlmostEqual(estimate["forward_price"], 256.523525929, places=8)
+        self.assertAlmostEqual(estimate["annualized_implied_vol_pct"], 27.550526627, places=8)
+        self.assertEqual(estimate["iv_reliability"], "high")
 
     def test_quote_pairing_uses_latest_quote_and_reports_rejections(self):
         quotes = pd.DataFrame([

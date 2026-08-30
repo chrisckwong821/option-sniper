@@ -20,6 +20,9 @@ except ImportError:  # Support direct execution with `python scripts/...`.
     from databento_config import resolve_historical_api_keys
 
 
+RISK_FREE_RATE = 0.04
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--universe", type=Path, required=True)
@@ -450,26 +453,33 @@ def normal_cdf(value):
     return 0.5 * (1 + math.erf(value / math.sqrt(2)))
 
 
-def black76_straddle(forward, strike, total_vol):
+def black76_straddle(forward, strike, total_vol, discount_factor=1.0):
     if total_vol <= 0:
-        return abs(forward - strike)
+        return discount_factor * abs(forward - strike)
     d1 = (math.log(forward / strike) + 0.5 * total_vol * total_vol) / total_vol
     d2 = d1 - total_vol
     call = forward * normal_cdf(d1) - strike * normal_cdf(d2)
     put = strike * normal_cdf(-d2) - forward * normal_cdf(-d1)
-    return call + put
+    return discount_factor * (call + put)
 
 
-def implied_total_vol(forward, strike, straddle_mid):
-    intrinsic = abs(forward - strike)
-    if forward <= 0 or strike <= 0 or straddle_mid <= intrinsic or straddle_mid >= forward + strike:
+def implied_total_vol(forward, strike, straddle_mid, discount_factor=1.0):
+    intrinsic = discount_factor * abs(forward - strike)
+    upper_bound = discount_factor * (forward + strike)
+    if (
+        forward <= 0
+        or strike <= 0
+        or discount_factor <= 0
+        or straddle_mid <= intrinsic
+        or straddle_mid >= upper_bound
+    ):
         return None
     low, high = 1e-7, 5.0
-    if black76_straddle(forward, strike, high) < straddle_mid:
+    if black76_straddle(forward, strike, high, discount_factor) < straddle_mid:
         return None
     for _ in range(80):
         middle = 0.5 * (low + high)
-        if black76_straddle(forward, strike, middle) < straddle_mid:
+        if black76_straddle(forward, strike, middle, discount_factor) < straddle_mid:
             low = middle
         else:
             high = middle
@@ -543,11 +553,14 @@ def prepare_option_pairs(quotes, candidates, option_expiry):
 
 def estimate_option_iv(candidate, pairs, year_fraction):
     spot = candidate["anchor_price"]
+    discount_factor = math.exp(-RISK_FREE_RATE * year_fraction)
     near_spot = [pair for pair in pairs if 0.8 * spot <= pair["strike"] <= 1.2 * spot]
     near_spot.sort(key=lambda pair: abs(math.log(pair["strike"] / spot)))
     forward_inputs = []
     for pair in near_spot[:9]:
-        forward = pair["strike"] + pair["call"]["mid"] - pair["put"]["mid"]
+        forward = pair["strike"] + (
+            pair["call"]["mid"] - pair["put"]["mid"]
+        ) / discount_factor
         total_spread = pair["call"]["spread"] + pair["put"]["spread"]
         if 0.7 * spot <= forward <= 1.3 * spot:
             forward_inputs.append((forward, 1 / max(total_spread, 0.01)))
@@ -564,7 +577,12 @@ def estimate_option_iv(candidate, pairs, year_fraction):
         if abs(math.log(pair["strike"] / forward)) > 0.075:
             continue
         straddle_mid = pair["call"]["mid"] + pair["put"]["mid"]
-        total_vol = implied_total_vol(forward, pair["strike"], straddle_mid)
+        total_vol = implied_total_vol(
+            forward,
+            pair["strike"],
+            straddle_mid,
+            discount_factor,
+        )
         if total_vol is None or not (0.001 <= total_vol <= 2.0):
             continue
         total_spread = pair["call"]["spread"] + pair["put"]["spread"]
@@ -598,6 +616,8 @@ def estimate_option_iv(candidate, pairs, year_fraction):
         "forward_vs_spot_pct": 100 * (forward / spot - 1),
         "forward_input_strikes": len(forward_inputs),
         "iv_input_strikes": len(estimates),
+        "risk_free_rate_pct": 100 * RISK_FREE_RATE,
+        "discount_factor": discount_factor,
         "annualized_implied_vol_pct": 100 * total_vol / math.sqrt(year_fraction),
         "full_horizon_implied_sigma_pct": 100 * total_vol,
         "atm_strike": atm["strike"],
@@ -901,7 +921,12 @@ def main():
         },
         "ranking_method": {
             "governing_volatility": f"Forward-ATM option-implied volatility at {config['option_valuation_time']}",
-            "option_model": "Undiscounted Black-76 on the option-implied forward; paired call-put mids across up to five near-forward strikes.",
+            "option_model": "Discounted Black-76 on the option-implied forward; paired call-put mids across up to five near-forward strikes.",
+            "risk_free_rate_assumption": {
+                "annual_decimal": RISK_FREE_RATE,
+                "annual_pct": 100 * RISK_FREE_RATE,
+                "type": "hard-coded continuously compounded rate",
+            },
             "year_fraction": "ACT/365 from option snapshot cutoff to expiration close",
             "option_year_fraction": option_year_fraction,
             "realized_year_fraction": realized_year_fraction,

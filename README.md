@@ -24,7 +24,9 @@ The historical screen uses consolidated `EQUS.SUMMARY` daily bars for closing
 prices, volume, and the daily-notional liquidity gate. Live equity prices remain
 on `EQUS.MINI`. Both route through `DATABENTO_LIVE_API_KEY`; historical OPRA
 access uses `DATABENTO_OPTIONS_API_KEY`. The IV denominator is a prior-close
-option snapshot, not historical volatility.
+option snapshot, not historical volatility. Option Sniper infers the forward
+from paired call-put mids and applies discounted Black-76 with a hard-coded 4%
+continuously compounded annual risk-free rate.
 
 ## Local development
 
