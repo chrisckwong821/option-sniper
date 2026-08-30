@@ -390,7 +390,9 @@ function renderTable(view) {
     ? `${pagination.start}-${pagination.end} of ${pagination.total}`
     : `${matchingRows.length} of ${payload.rows.length}`;
   table.methodLine.textContent = view === "today"
-    ? `${observedRows} of ${payload.rows.length} current-session prices · ranked by ${sortLabel(view)}`
+    ? observedRows > 0
+      ? `${observedRows} of ${payload.rows.length} current-session prices · ranked by ${sortLabel(view)}`
+      : `No current-session prices yet · showing ${formatDate(payload.data_date)} closing snapshot · ranked by ${sortLabel(view)}`
     : `Fixed 20-name list · ranked by ${sortLabel(view)}`;
   if (view === "today") {
     elements.todayPagination.hidden = pagination.totalPages <= 1;
