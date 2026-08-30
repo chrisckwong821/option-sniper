@@ -61,6 +61,38 @@
       || payloadAnchorDate === targetCompletedSession;
   }
 
+  function streamSequenceDecision(lastSequence, messageType, incomingSequence) {
+    const parsedCurrent = Number(lastSequence);
+    const current = lastSequence !== null
+      && lastSequence !== undefined
+      && Number.isInteger(parsedCurrent)
+      ? parsedCurrent
+      : null;
+    const incoming = Number(incomingSequence);
+    if (!Number.isInteger(incoming) || incoming < 0) {
+      return { action: "resync", sequence: current };
+    }
+    if (messageType === "snapshot") {
+      return { action: "accept", sequence: incoming };
+    }
+    if (messageType === "status") {
+      if (current === null || incoming > current) {
+        return { action: "resync", sequence: current };
+      }
+      return {
+        action: incoming === current ? "accept" : "ignore",
+        sequence: current,
+      };
+    }
+    if (messageType !== "delta" || current === null || incoming > current + 1) {
+      return { action: "resync", sequence: current };
+    }
+    return {
+      action: incoming === current + 1 ? "accept" : "ignore",
+      sequence: incoming === current + 1 ? incoming : current,
+    };
+  }
+
   function paginateRows(rows, requestedPage, requestedPageSize) {
     const values = Array.isArray(rows) ? rows : [];
     const pageSize = Math.max(1, Math.floor(Number(requestedPageSize)) || 20);
@@ -88,5 +120,6 @@
     isPriceForTradingDate,
     paginateRows,
     sessionLabel,
+    streamSequenceDecision,
   });
 });

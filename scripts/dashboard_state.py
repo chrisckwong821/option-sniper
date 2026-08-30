@@ -266,11 +266,13 @@ def refresh_dashboard_state(
     })
 
 
-def build_mock_bundle(plan: RefreshPlan) -> dict[str, Any]:
+def build_mock_bundle(plan: RefreshPlan, symbol_count: int = 30) -> dict[str, Any]:
+    if symbol_count < 20:
+        raise ValueError("Mock symbol count must be at least 20")
     sectors = ["Technology", "Industrials", "Consumer", "Financials", "Healthcare"]
     reliabilities = ["high", "high", "medium", "low"]
     today_rows = []
-    for index in range(30):
+    for index in range(symbol_count):
         number = index + 1
         price = 45.0 + number * 4.25
         sigma = 1.4 + (index % 7) * 0.32
@@ -403,10 +405,14 @@ class DashboardStateManager:
         plan: RefreshPlan,
         mode: str = "auto",
         mock: bool = False,
+        mock_symbol_count: int = 30,
     ) -> dict[str, Any]:
         if mock:
             return self._with_runtime_cache(
-                build_mock_bundle(plan), plan, "mock", "generated-mock"
+                build_mock_bundle(plan, mock_symbol_count),
+                plan,
+                "mock",
+                "generated-mock",
             )
 
         cached = self.load_cache()

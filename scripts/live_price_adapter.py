@@ -59,6 +59,10 @@ STALE_AFTER_SECONDS = {
     "closed": 900,
 }
 TASKS_KEY = web.AppKey("tasks", list)
+STREAM_SCHEMA_VERSION = "1.1"
+DEFAULT_BROADCAST_INTERVAL = 1.0
+DEFAULT_STATUS_INTERVAL = 15.0
+DEFAULT_SEND_TIMEOUT = 2.0
 
 
 def utc_now() -> datetime:
@@ -107,16 +111,44 @@ class FeedConfig:
 
 
 class PriceStore:
-    def __init__(self, symbols: list[str], cache_path: Path) -> None:
+    def __init__(
+        self,
+        symbols: list[str],
+        cache_path: Path,
+        broadcast_interval: float = DEFAULT_BROADCAST_INTERVAL,
+        status_interval: float = DEFAULT_STATUS_INTERVAL,
+        send_timeout: float = DEFAULT_SEND_TIMEOUT,
+    ) -> None:
         self.symbols = frozenset(symbols)
         self.cache_path = cache_path
+        self.broadcast_interval = broadcast_interval
+        self.status_interval = status_interval
+        self.send_timeout = send_timeout
         self.prices: dict[str, dict[str, Any]] = {}
         self.feed_status: dict[str, dict[str, Any]] = {}
         self.clients: set[web.WebSocketResponse] = set()
-        self.changed = asyncio.Event()
+        self.dirty_symbols: set[str] = set()
+        self.status_dirty = False
         self.cache_dirty = False
         self.sequence = 0
         self.started_at = utc_now()
+        self.snapshot_generation = 0
+        self.snapshot_cache: tuple[int, int, str] | None = None
+        self.broadcasts = 0
+        self.delta_broadcasts = 0
+        self.status_broadcasts = 0
+        self.snapshot_sends = 0
+        self.fanout_messages = 0
+        self.fanout_bytes = 0
+        self.send_failures = 0
+        self.last_batch_symbols = 0
+        self.max_batch_symbols = 0
+        self.last_message_bytes = 0
+        self.last_broadcast_duration_ms = 0.0
+
+    def invalidate_snapshot(self) -> None:
+        self.snapshot_generation += 1
+        self.snapshot_cache = None
 
     def set_feed_status(self, dataset: str, state: str, detail: str = "") -> None:
         previous = self.feed_status.get(dataset, {})
@@ -130,7 +162,8 @@ class PriceStore:
             "updated_at": utc_now().isoformat(),
             "last_record_at": previous.get("last_record_at"),
         }
-        self.changed.set()
+        self.status_dirty = True
+        self.invalidate_snapshot()
 
     def touch_feed(self, dataset: str) -> None:
         status = self.feed_status.setdefault(dataset, {})
@@ -148,12 +181,15 @@ class PriceStore:
         event_time: datetime,
         dataset: str,
         volume: int | None = None,
+        *,
+        session_override: str | None = None,
+        trading_date_override: str | None = None,
     ) -> bool:
         event_time = ensure_aware(event_time).astimezone(UTC)
-        session = market_session_at(event_time)
+        session = session_override or market_session_at(event_time)
         if ticker not in self.symbols or not math.isfinite(price) or price <= 0:
             return False
-        if session == "closed":
+        if session == "closed" or session not in SESSION_LABELS:
             return False
 
         previous = self.prices.get(ticker)
@@ -167,13 +203,14 @@ class PriceStore:
             "source_dataset": dataset,
             "session": session,
             "session_label": SESSION_LABELS[session],
-            "trading_date": trading_date_at(event_time),
+            "trading_date": trading_date_override or trading_date_at(event_time),
             "is_extended_hours": session != "regular",
             "volume": volume,
         }
         self.touch_feed(dataset)
+        self.dirty_symbols.add(ticker)
         self.cache_dirty = True
-        self.changed.set()
+        self.invalidate_snapshot()
         return True
 
     def public_price(self, point: dict[str, Any], now: datetime) -> dict[str, Any]:
@@ -186,12 +223,19 @@ class PriceStore:
             "is_stale": age_seconds > stale_after,
         }
 
-    def payload(self, message_type: str = "snapshot") -> dict[str, Any]:
+    def message(
+        self,
+        message_type: str,
+        tickers: list[str],
+        *,
+        advance_sequence: bool = False,
+    ) -> dict[str, Any]:
+        if advance_sequence:
+            self.sequence += 1
         now = utc_now()
-        self.sequence += 1
         return {
             "type": message_type,
-            "schema_version": "1.0",
+            "schema_version": STREAM_SCHEMA_VERSION,
             "sequence": self.sequence,
             "server_time": now.isoformat(),
             "market_session": market_session_at(now),
@@ -199,9 +243,81 @@ class PriceStore:
             "trading_date": trading_date_at(now),
             "prices": [
                 self.public_price(self.prices[ticker], now)
-                for ticker in sorted(self.prices)
+                for ticker in tickers
+                if ticker in self.prices
             ],
             "feeds": self.feed_status,
+        }
+
+    def payload(self, message_type: str = "snapshot") -> dict[str, Any]:
+        return self.message(message_type, sorted(self.prices))
+
+    def snapshot_text(self) -> tuple[int, str]:
+        cached = self.snapshot_cache
+        if cached and cached[:2] == (self.snapshot_generation, self.sequence):
+            return cached[1], cached[2]
+        text = self.encode(self.payload())
+        self.snapshot_cache = (self.snapshot_generation, self.sequence, text)
+        return self.sequence, text
+
+    @staticmethod
+    def encode(payload: dict[str, Any]) -> str:
+        return json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+
+    async def send_snapshot(self, client: web.WebSocketResponse) -> int:
+        sequence, text = self.snapshot_text()
+        await asyncio.wait_for(client.send_str(text), timeout=self.send_timeout)
+        self.snapshot_sends += 1
+        self.fanout_messages += 1
+        self.fanout_bytes += len(text.encode("utf-8"))
+        return sequence
+
+    async def broadcast(self, payload: dict[str, Any]) -> None:
+        text = self.encode(payload)
+        message_bytes = len(text.encode("utf-8"))
+        clients = tuple(self.clients)
+        started = asyncio.get_running_loop().time()
+
+        async def send(client: web.WebSocketResponse) -> bool:
+            try:
+                await asyncio.wait_for(client.send_str(text), timeout=self.send_timeout)
+                return True
+            except (asyncio.TimeoutError, ConnectionError, RuntimeError):
+                return False
+
+        results = await asyncio.gather(*(send(client) for client in clients))
+        disconnected = [client for client, sent in zip(clients, results) if not sent]
+        for client in disconnected:
+            self.clients.discard(client)
+
+        sent_count = len(clients) - len(disconnected)
+        self.broadcasts += 1
+        self.fanout_messages += sent_count
+        self.fanout_bytes += sent_count * message_bytes
+        self.send_failures += len(disconnected)
+        self.last_message_bytes = message_bytes
+        self.last_broadcast_duration_ms = round(
+            (asyncio.get_running_loop().time() - started) * 1000,
+            3,
+        )
+
+    def stream_metrics(self) -> dict[str, Any]:
+        return {
+            "connected_clients": len(self.clients),
+            "sequence": self.sequence,
+            "broadcast_interval_seconds": self.broadcast_interval,
+            "status_interval_seconds": self.status_interval,
+            "broadcasts": self.broadcasts,
+            "delta_broadcasts": self.delta_broadcasts,
+            "status_broadcasts": self.status_broadcasts,
+            "snapshot_sends": self.snapshot_sends,
+            "fanout_messages": self.fanout_messages,
+            "fanout_bytes": self.fanout_bytes,
+            "send_failures": self.send_failures,
+            "last_batch_symbols": self.last_batch_symbols,
+            "max_batch_symbols": self.max_batch_symbols,
+            "last_message_bytes": self.last_message_bytes,
+            "last_broadcast_duration_ms": self.last_broadcast_duration_ms,
         }
 
     def load_cache(self) -> None:
@@ -221,6 +337,7 @@ class PriceStore:
                         "session_label", "trading_date", "is_extended_hours", "volume",
                     )
                 }
+            self.invalidate_snapshot()
         except (OSError, ValueError, TypeError, KeyError):
             self.prices = {}
 
@@ -237,22 +354,35 @@ class PriceStore:
         self.cache_dirty = False
 
     async def broadcast_loop(self, stop: asyncio.Event) -> None:
+        last_status_at = asyncio.get_running_loop().time()
         while not stop.is_set():
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(self.changed.wait(), timeout=5)
-                await asyncio.sleep(0.2)
-            self.changed.clear()
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=self.broadcast_interval)
+            except asyncio.TimeoutError:
+                pass
+            if stop.is_set():
+                break
+            dirty_symbols = sorted(self.dirty_symbols)
+            self.dirty_symbols.clear()
+            status_dirty = self.status_dirty
+            self.status_dirty = False
             if not self.clients:
                 continue
-            payload = self.payload("prices")
-            disconnected: list[web.WebSocketResponse] = []
-            for client in tuple(self.clients):
-                try:
-                    await client.send_json(payload)
-                except (ConnectionError, RuntimeError):
-                    disconnected.append(client)
-            for client in disconnected:
-                self.clients.discard(client)
+            now = asyncio.get_running_loop().time()
+            if dirty_symbols:
+                self.last_batch_symbols = len(dirty_symbols)
+                self.max_batch_symbols = max(self.max_batch_symbols, len(dirty_symbols))
+                payload = self.message("delta", dirty_symbols, advance_sequence=True)
+                self.delta_broadcasts += 1
+                last_status_at = now
+            elif status_dirty or now - last_status_at >= self.status_interval:
+                self.last_batch_symbols = 0
+                payload = self.message("status", [])
+                self.status_broadcasts += 1
+                last_status_at = now
+            else:
+                continue
+            await self.broadcast(payload)
 
     async def cache_loop(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
@@ -405,7 +535,6 @@ async def mock_feed(
         session = market_session_at(now)
         if session == "closed":
             session = "afterhours"
-            now = now.replace(hour=23, minute=0)
         for index, (ticker, anchor) in enumerate(anchors.items()):
             wave = math.sin(phase + index * 0.43) * 0.0025
             store.update_price(
@@ -414,6 +543,8 @@ async def mock_feed(
                 now,
                 "MOCK.LIVE",
                 100 + index,
+                session_override=session,
+                trading_date_override=trading_date_at(now),
             )
         phase += 0.35
         await asyncio.sleep(1)
@@ -425,6 +556,9 @@ def tracked_symbols(snapshot: dict[str, Any], universe: dict[str, Any]) -> list[
         for payload in (snapshot, universe)
         for row in payload["rows"]
     })
+
+
+STORE_KEY = web.AppKey("price_store", PriceStore)
 
 
 def create_app(
@@ -454,16 +588,28 @@ def create_app(
             plan,
             mode=args.refresh_mode,
             mock=args.mock,
+            mock_symbol_count=getattr(args, "mock_symbols", 30),
         )
 
     snapshot = state_bundle["snapshot"]
     universe = state_bundle["today"]
     symbols = tracked_symbols(snapshot, universe)
-    store = PriceStore(symbols=symbols, cache_path=args.cache)
+    store = PriceStore(
+        symbols=symbols,
+        cache_path=args.cache,
+        broadcast_interval=getattr(
+            args,
+            "broadcast_interval",
+            DEFAULT_BROADCAST_INTERVAL,
+        ),
+        status_interval=getattr(args, "status_interval", DEFAULT_STATUS_INTERVAL),
+        send_timeout=getattr(args, "send_timeout", DEFAULT_SEND_TIMEOUT),
+    )
     store.load_cache()
     stop = asyncio.Event()
     app = web.Application()
     app[TASKS_KEY] = []
+    app[STORE_KEY] = store
 
     async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
         origin = request.headers.get("Origin")
@@ -472,8 +618,11 @@ def create_app(
             raise web.HTTPForbidden(text="WebSocket origin is not allowed")
         socket = web.WebSocketResponse(heartbeat=20, receive_timeout=60)
         await socket.prepare(request)
+        while True:
+            snapshot_sequence = await store.send_snapshot(socket)
+            if store.sequence == snapshot_sequence:
+                break
         store.clients.add(socket)
-        await socket.send_json(store.payload())
         try:
             async for message in socket:
                 if message.type == WSMsgType.TEXT and message.data == "ping":
@@ -495,6 +644,7 @@ def create_app(
             "status": state_bundle.get("cache", {}).get("status", "unknown"),
             "source": state_bundle.get("cache", {}).get("source", "unknown"),
         }
+        payload["stream"] = store.stream_metrics()
         return web.json_response(payload)
 
     async def state_handler(_: web.Request) -> web.Response:
@@ -582,7 +732,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--day-dataset", default="EQUS.MINI")
     parser.add_argument("--overnight-dataset", default="OCEA.MEMOIR")
     parser.add_argument("--replay-minutes", type=int, default=60)
+    parser.add_argument("--broadcast-interval", type=float, default=DEFAULT_BROADCAST_INTERVAL)
+    parser.add_argument("--status-interval", type=float, default=DEFAULT_STATUS_INTERVAL)
+    parser.add_argument("--send-timeout", type=float, default=DEFAULT_SEND_TIMEOUT)
     parser.add_argument("--disable-overnight", action="store_true")
+    parser.add_argument("--mock-symbols", type=int, default=30)
     parser.add_argument(
         "--refresh-mode",
         choices=("auto", "force", "never"),

@@ -79,6 +79,31 @@ class PriceStoreTests(unittest.TestCase):
         restored.load_cache()
         self.assertEqual(restored.prices["PANW"]["price"], 390)
 
+    def test_snapshot_sequence_is_stable_until_delta_advances_it(self):
+        event_time = datetime(2026, 8, 28, 13, 30, tzinfo=UTC)
+        self.store.update_price("PANW", 390, event_time, "EQUS.MINI", 100)
+        first = self.store.payload()
+        second = self.store.payload()
+        delta = self.store.message("delta", ["PANW"], advance_sequence=True)
+
+        self.assertEqual(first["schema_version"], "1.1")
+        self.assertEqual(first["sequence"], second["sequence"])
+        self.assertEqual(delta["sequence"], first["sequence"] + 1)
+        self.assertEqual([point["ticker"] for point in delta["prices"]], ["PANW"])
+
+    def test_mock_override_can_emit_a_weekend_price(self):
+        weekend = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+        self.assertTrue(self.store.update_price(
+            "PANW",
+            392,
+            weekend,
+            "MOCK.LIVE",
+            session_override="afterhours",
+            trading_date_override="2026-08-30",
+        ))
+        self.assertEqual(self.store.prices["PANW"]["session"], "afterhours")
+        self.assertEqual(self.store.prices["PANW"]["trading_date"], "2026-08-30")
+
 
 class SymbolUniverseTests(unittest.TestCase):
     def test_tracks_union_of_fixed_and_iv_universe(self):

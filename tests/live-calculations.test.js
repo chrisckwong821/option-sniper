@@ -58,4 +58,17 @@ assert.deepEqual(SigmaMath.paginateRows(rows, 2, 20), {
 assert.equal(SigmaMath.paginateRows(rows, 99, 20).page, 3);
 assert.equal(SigmaMath.paginateRows([], 1, 20).start, 0);
 
+assert.deepEqual(SigmaMath.streamSequenceDecision(null, "snapshot", 7), {
+  action: "accept",
+  sequence: 7,
+});
+assert.deepEqual(SigmaMath.streamSequenceDecision(7, "delta", 8), {
+  action: "accept",
+  sequence: 8,
+});
+assert.equal(SigmaMath.streamSequenceDecision(8, "delta", 8).action, "ignore");
+assert.equal(SigmaMath.streamSequenceDecision(8, "delta", 10).action, "resync");
+assert.equal(SigmaMath.streamSequenceDecision(8, "status", 8).action, "accept");
+assert.equal(SigmaMath.streamSequenceDecision(null, "delta", 1).action, "resync");
+
 console.log("live calculations: ok");

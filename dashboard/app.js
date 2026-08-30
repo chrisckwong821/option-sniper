@@ -26,6 +26,7 @@ const state = {
     dataDate: null,
     marketSession: "snapshot",
     pricesReceived: 0,
+    sequence: null,
   },
   renderQueued: false,
 };
@@ -550,6 +551,18 @@ function applyLivePriceToRow(row, point) {
 
 function handlePriceMessage(message) {
   if (!message || !Array.isArray(message.prices)) return;
+  const decision = window.SigmaMath.streamSequenceDecision(
+    state.live.sequence,
+    message.type,
+    message.sequence,
+  );
+  if (decision.action === "ignore") return;
+  if (decision.action === "resync") {
+    setConnectionState("stale", "Resyncing");
+    state.live.socket?.close(4001, "Price sequence gap");
+    return;
+  }
+  state.live.sequence = decision.sequence;
   state.live.lastMessageAt = Date.now();
   state.live.marketSession = message.market_session || state.live.marketSession;
   state.live.dataDate = message.trading_date || state.live.dataDate;
@@ -588,6 +601,7 @@ function connectLivePrices() {
     state.live.connected = true;
     state.live.retryAttempt = 0;
     state.live.lastMessageAt = Date.now();
+    state.live.sequence = null;
     setConnectionState("connecting", "Syncing");
   });
   socket.addEventListener("message", (event) => {
