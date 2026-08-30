@@ -96,6 +96,14 @@ if [[ "$healthy" != true ]]; then
 fi
 
 sudo ln -sfn "$release" "$current_link"
+sudo install -o root -g root -m 0644 \
+  "$release/deploy/option-sniper-refresh.service" \
+  /etc/systemd/system/option-sniper-refresh.service
+sudo install -o root -g root -m 0644 \
+  "$release/deploy/option-sniper-refresh.timer" \
+  /etc/systemd/system/option-sniper-refresh.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now option-sniper-refresh.timer
 sudo docker inspect --format \
   'deployed image={{.Config.Image}} status={{.State.Status}} health={{.State.Health.Status}} restarts={{.RestartCount}}' \
   sigma-tape

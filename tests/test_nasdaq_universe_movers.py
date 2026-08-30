@@ -174,6 +174,35 @@ class UniverseFilterTests(unittest.TestCase):
         self.assertFalse(capped)
         self.assertEqual(exclusions["liquidity"], 1)
 
+    def test_spot_candidates_can_disable_liquidity_gate_and_target_cap(self):
+        sessions = [date(2026, 8, 26), date(2026, 8, 27)]
+        history = pd.DataFrame([
+            {"symbol": symbol, "date": session, "open": 100, "close": 100, "volume": volume}
+            for symbol, volume in (("ZZZ", 1), ("AAA", 0))
+            for session in sessions
+        ])
+        universe = [
+            {"symbol": symbol, "name": symbol, "sector": "Tech", "industry": "Chips", "market_cap": 6e9}
+            for symbol in ("ZZZ", "AAA")
+        ]
+
+        qualified, selected, effective, capped, exclusions = build_spot_candidates(
+            history,
+            universe,
+            daily_notional_min=None,
+            candidate_target=None,
+            window_start=sessions[0],
+            week_dates=sessions,
+            anchor_label="official close",
+            anchor_field="close",
+        )
+
+        self.assertEqual([row["ticker"] for row in qualified], ["AAA", "ZZZ"])
+        self.assertEqual(selected, qualified)
+        self.assertIsNone(effective)
+        self.assertFalse(capped)
+        self.assertEqual(exclusions["liquidity"], 0)
+
     def test_spot_cost_guard_stops_before_download(self):
         client = MagicMock()
         client.metadata.get_cost.return_value = 1.01

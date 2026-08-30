@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh Option Sniper's completed-session universe
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/sigma-tape/current/deploy/refresh-production.sh
+TimeoutStartSec=90min
+
+[Install]
+WantedBy=multi-user.target

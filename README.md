@@ -12,21 +12,28 @@ existing caches, secrets, and EC2 releases remain compatible.
 ## Architecture
 
 - `scripts/dashboard_state.py` resolves the latest completed Nasdaq session,
-  validates the private cache, and refreshes stale or missing state.
+  validates the private cache and screening policy, and refreshes stale state.
 - `scripts/nasdaq_universe_movers.py` performs the bounded historical spot and
-  option screen. The default pre-option candidate cap is 300.
+  option screen.
 - `scripts/live_price_adapter.py` serves the frontend and `/api/state`, then
   adapts Databento's Python live client to `/ws/prices` for the browser.
 - `dashboard/app.js` applies incoming prices and computes gain and Z-score in
   the browser. A stale anchor is never used for the dynamic ranking.
 
+The production universe includes comparable stocks above `$5 billion` in market
+capitalization. There is no daily-notional gate and no pre-option candidate cap.
+A stock is retained only when the nearest weekly expiration is 1 through 7
+calendar days after the completed session and its paired option quotes produce a
+mathematically valid IV. The upper bound is inclusive, so a following-Friday
+contract is eligible from the prior Friday close.
+
 The historical screen uses consolidated `EQUS.SUMMARY` daily bars for closing
-prices, volume, and the daily-notional liquidity gate. Live equity prices remain
-on `EQUS.MINI`. Both route through `DATABENTO_LIVE_API_KEY`; historical OPRA
-access uses `DATABENTO_OPTIONS_API_KEY`. The IV denominator is a prior-close
-option snapshot, not historical volatility. Option Sniper infers the forward
-from paired call-put mids and applies discounted Black-76 with a hard-coded 4%
-continuously compounded annual risk-free rate.
+prices. Live equity prices remain on `EQUS.MINI`. Both route through
+`DATABENTO_LIVE_API_KEY`; historical OPRA access uses
+`DATABENTO_OPTIONS_API_KEY`. The IV denominator is a prior-close option snapshot,
+not historical volatility. Option Sniper infers the forward from paired call-put
+mids and applies discounted Black-76 with a hard-coded 4% continuously
+compounded annual risk-free rate.
 
 ## Local development
 
@@ -68,10 +75,17 @@ python -m scripts.live_price_adapter --disable-overnight
 ```
 
 At startup, `auto` mode accepts `.cache/sigma-tape/dashboard-state.json` only
-when its anchor matches the latest completed Nasdaq session. Otherwise it
-fetches the Nasdaq listing universe and runs one bounded Databento refresh. If
-that refresh fails, an older valid cache is served with a visible stale warning;
-without any valid cache, startup fails clearly.
+when its anchor matches the latest completed Nasdaq session and its policy
+fingerprint matches the current eligibility rules. Otherwise it fetches the
+Nasdaq listing universe and runs one bounded Databento refresh. If that refresh
+fails, an older valid cache is served with a visible stale warning; without any
+valid cache, startup fails clearly.
+
+Production also runs `option-sniper-refresh.timer` at 08:00 America/New_York on
+weekdays. The one-shot job builds the next cache while the current adapter keeps
+serving viewers, then recreates the adapter only after the cache is written
+successfully. It performs no Databento download when the cache already covers
+the latest completed session and current screening policy.
 
 Useful controls:
 

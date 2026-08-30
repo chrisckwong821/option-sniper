@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule Option Sniper's weekday universe refresh
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 08:00:00 America/New_York
+Persistent=true
+RandomizedDelaySec=30
+Unit=option-sniper-refresh.service
+
+[Install]
+WantedBy=timers.target

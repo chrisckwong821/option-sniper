@@ -41,8 +41,24 @@ Do not add either value to an image, release archive, or GitHub Actions log.
 
 The container uses `restart: unless-stopped`, so Docker restores it after a host
 reboot. The image contains no credentials or market snapshots. A mounted cache
-is accepted only when it matches the latest completed Nasdaq session; otherwise
-the backend performs its bounded historical refresh before opening the server.
+is accepted only when it matches the latest completed Nasdaq session and current
+screening policy; otherwise the backend performs its bounded historical refresh
+before opening the server.
+
+Successful deployments install `option-sniper-refresh.timer`. It runs at 08:00
+America/New_York every weekday, including across daylight-saving changes. The
+job refreshes the shared cache in a temporary container while the public adapter
+continues serving, and recreates the adapter only when the cache changed. A
+failed Databento refresh leaves the running service and prior cache untouched.
+
+Inspect or manually trigger the refresh with:
+
+```bash
+sudo systemctl list-timers option-sniper-refresh.timer --no-pager
+sudo systemctl status option-sniper-refresh.timer --no-pager
+sudo systemctl start option-sniper-refresh.service
+sudo journalctl -u option-sniper-refresh.service -n 100 --no-pager
+```
 
 For public access, keep port `8765` bound to loopback and publish
 `http://127.0.0.1:8765` through a Cloudflare Tunnel. Do not cache `/api/*` or

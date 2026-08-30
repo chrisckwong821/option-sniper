@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -29,6 +30,7 @@ except ImportError:  # Support direct execution with `python scripts/...`.
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CACHE_ROOT = ROOT / ".cache" / "sigma-tape"
 DEFAULT_STATE_CACHE = DEFAULT_CACHE_ROOT / "dashboard-state.json"
+SCREENING_POLICY_VERSION = "mcap5b-nearest-weekly-7d-v1"
 NASDAQ_SCREENER_URL = (
     "https://api.nasdaq.com/api/screener/stocks"
     "?tableonly=true&limit=10000&offset=0&download=true"
@@ -50,13 +52,53 @@ class RefreshPlan:
 
 @dataclass(frozen=True)
 class RefreshSettings:
-    market_cap_min: float = 10_000_000_000
-    daily_notional_min: float = 25_000_000
-    candidate_target: int = 300
+    market_cap_min: float = 5_000_000_000
+    daily_notional_min: float | None = None
+    candidate_target: int | None = None
+    max_expiry_dte_days: int = 7
     result_limit: int = 20
     spot_dataset: str = "EQUS.SUMMARY"
     max_spot_cost: float = 1.0
     max_option_cost: float = 5.0
+
+
+def screening_policy(settings: RefreshSettings | None = None) -> dict[str, Any]:
+    config = settings or RefreshSettings()
+    return {
+        "version": SCREENING_POLICY_VERSION,
+        "market_cap_min_usd": config.market_cap_min,
+        "daily_notional_min_usd": config.daily_notional_min,
+        "candidate_target": config.candidate_target,
+        "expiry": {
+            "rule": "nearest weekly expiration after the completed session",
+            "minimum_calendar_dte": 1,
+            "maximum_calendar_dte": config.max_expiry_dte_days,
+            "maximum_is_inclusive": True,
+        },
+        "requires_mathematically_valid_option_iv": True,
+        "risk_free_rate_annual_decimal": 0.04,
+    }
+
+
+def screening_policy_fingerprint(settings: RefreshSettings | None = None) -> str:
+    encoded = json.dumps(
+        screening_policy(settings),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def validate_expiry_horizon(plan: RefreshPlan, settings: RefreshSettings) -> None:
+    completed = date.fromisoformat(plan.completed_session)
+    expiry = date.fromisoformat(plan.option_expiry)
+    calendar_dte = (expiry - completed).days
+    if not 1 <= calendar_dte <= settings.max_expiry_dte_days:
+        raise ValueError(
+            "Nearest weekly option expiration must be 1 through "
+            f"{settings.max_expiry_dte_days} calendar days after the completed session; "
+            f"received {calendar_dte}"
+        )
 
 
 def utc_now() -> datetime:
@@ -210,6 +252,7 @@ def refresh_dashboard_state(
         )
 
     config = settings or RefreshSettings()
+    validate_expiry_horizon(plan, config)
     work = cache_root / "refresh" / plan.completed_session
     universe_path = work / "nasdaq-universe.json"
     screen_path = work / "screen.json"
@@ -224,8 +267,6 @@ def refresh_dashboard_state(
         "--window-start", plan.prior_session,
         "--window-end", plan.completed_session,
         "--market-cap-min", str(config.market_cap_min),
-        "--daily-notional-min", str(config.daily_notional_min),
-        "--candidate-target", str(config.candidate_target),
         "--limit", str(config.result_limit),
         "--spot-dataset", config.spot_dataset,
         "--max-spot-cost", str(config.max_spot_cost),
@@ -241,6 +282,10 @@ def refresh_dashboard_state(
         "--ranking-horizon", "realized_window",
         "--direction", "gainers",
     ]
+    if config.daily_notional_min is not None:
+        command.extend(["--daily-notional-min", str(config.daily_notional_min)])
+    if config.candidate_target is not None:
+        command.extend(["--candidate-target", str(config.candidate_target)])
     result = subprocess.run(
         command,
         cwd=ROOT,
@@ -261,12 +306,18 @@ def refresh_dashboard_state(
         "schema_version": "1.0",
         "generated_at_utc": utc_now().isoformat(),
         "refresh_plan": asdict(plan),
+        "screening_policy": screening_policy(config),
+        "screening_policy_fingerprint": screening_policy_fingerprint(config),
         "snapshot": snapshot,
         "today": today,
     })
 
 
-def build_mock_bundle(plan: RefreshPlan, symbol_count: int = 30) -> dict[str, Any]:
+def build_mock_bundle(
+    plan: RefreshPlan,
+    symbol_count: int = 30,
+    settings: RefreshSettings | None = None,
+) -> dict[str, Any]:
     if symbol_count < 20:
         raise ValueError("Mock symbol count must be at least 20")
     sectors = ["Technology", "Industrials", "Consumer", "Financials", "Healthcare"]
@@ -357,6 +408,8 @@ def build_mock_bundle(plan: RefreshPlan, symbol_count: int = 30) -> dict[str, An
         "schema_version": "1.0",
         "generated_at_utc": utc_now().isoformat(),
         "refresh_plan": asdict(plan),
+        "screening_policy": screening_policy(settings),
+        "screening_policy_fingerprint": screening_policy_fingerprint(settings),
         "snapshot": snapshot,
         "today": today,
     })
@@ -367,10 +420,13 @@ class DashboardStateManager:
         self,
         cache_path: Path = DEFAULT_STATE_CACHE,
         refresh: Callable[[RefreshPlan], dict[str, Any]] | None = None,
+        settings: RefreshSettings | None = None,
     ) -> None:
         self.cache_path = cache_path
+        self.settings = settings or RefreshSettings()
+        self.expected_policy_fingerprint = screening_policy_fingerprint(self.settings)
         self.refresh = refresh or (
-            lambda plan: refresh_dashboard_state(plan, cache_path.parent)
+            lambda plan: refresh_dashboard_state(plan, cache_path.parent, self.settings)
         )
 
     def load_cache(self) -> dict[str, Any] | None:
@@ -383,8 +439,8 @@ class DashboardStateManager:
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return None
 
-    @staticmethod
     def _with_runtime_cache(
+        self,
         bundle: dict[str, Any],
         plan: RefreshPlan,
         status: str,
@@ -396,6 +452,8 @@ class DashboardStateManager:
             "status": status,
             "source": source,
             "target_completed_session": plan.completed_session,
+            "screening_policy_fingerprint": bundle.get("screening_policy_fingerprint"),
+            "expected_screening_policy_fingerprint": self.expected_policy_fingerprint,
             "last_refresh_error": error,
         }
         return result
@@ -409,7 +467,7 @@ class DashboardStateManager:
     ) -> dict[str, Any]:
         if mock:
             return self._with_runtime_cache(
-                build_mock_bundle(plan, mock_symbol_count),
+                build_mock_bundle(plan, mock_symbol_count, self.settings),
                 plan,
                 "mock",
                 "generated-mock",
@@ -420,6 +478,8 @@ class DashboardStateManager:
             cached
             and cached["snapshot"].get("data_date") == plan.completed_session
             and cached["today"].get("anchor_date") == plan.completed_session
+            and cached.get("screening_policy_fingerprint")
+            == self.expected_policy_fingerprint
         )
         if fresh and mode != "force":
             return self._with_runtime_cache(cached, plan, "fresh", "cache")
@@ -429,9 +489,15 @@ class DashboardStateManager:
             raise RuntimeError("Dashboard state cache is missing and refresh is disabled")
 
         try:
+            validate_expiry_horizon(plan, self.settings)
             refreshed = hydrate_completed_session_metrics(validate_bundle(self.refresh(plan)))
             if refreshed["snapshot"].get("data_date") != plan.completed_session:
                 raise ValueError("Refresh did not produce the target completed session")
+            if (
+                refreshed.get("screening_policy_fingerprint")
+                != self.expected_policy_fingerprint
+            ):
+                raise ValueError("Refresh did not use the expected screening policy")
             atomic_write_json(self.cache_path, refreshed)
             return self._with_runtime_cache(refreshed, plan, "fresh", "refresh")
         except Exception as exc:

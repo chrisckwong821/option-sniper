@@ -583,6 +583,7 @@ def create_app(
                 args.state_cache.parent,
                 settings,
             ),
+            settings=settings,
         )
         state_bundle = manager.ensure_state(
             plan,
@@ -643,6 +644,9 @@ def create_app(
             "data_date": snapshot["data_date"],
             "status": state_bundle.get("cache", {}).get("status", "unknown"),
             "source": state_bundle.get("cache", {}).get("source", "unknown"),
+            "screening_policy_fingerprint": state_bundle.get(
+                "screening_policy_fingerprint"
+            ),
         }
         payload["stream"] = store.stream_metrics()
         return web.json_response(payload)
@@ -743,9 +747,9 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         help="Refresh stale dashboard state, always refresh, or only use cache.",
     )
-    parser.add_argument("--market-cap-min", type=float, default=10_000_000_000)
-    parser.add_argument("--daily-notional-min", type=float, default=25_000_000)
-    parser.add_argument("--candidate-target", type=int, default=300)
+    parser.add_argument("--market-cap-min", type=float, default=5_000_000_000)
+    parser.add_argument("--daily-notional-min", type=float)
+    parser.add_argument("--candidate-target", type=int)
     parser.add_argument("--result-limit", type=int, default=20)
     parser.add_argument(
         "--spot-dataset",

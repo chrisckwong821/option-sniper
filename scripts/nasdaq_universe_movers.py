@@ -31,14 +31,14 @@ def parse_args():
     parser.add_argument("--candidate-csv-output", type=Path)
     parser.add_argument("--window-start", type=pd.Timestamp, required=True)
     parser.add_argument("--window-end", type=pd.Timestamp, required=True)
-    parser.add_argument("--market-cap-min", type=float, default=10_000_000_000)
-    parser.add_argument("--daily-notional-min", type=float, default=25_000_000)
+    parser.add_argument("--market-cap-min", type=float, default=5_000_000_000)
+    parser.add_argument("--daily-notional-min", type=float)
     parser.add_argument(
         "--liquidity-manifest",
         type=Path,
         help="Optional per-symbol session notionals used instead of spot-feed volume.",
     )
-    parser.add_argument("--candidate-target", type=int, default=300)
+    parser.add_argument("--candidate-target", type=int)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument(
         "--spot-dataset",
@@ -182,6 +182,7 @@ def build_spot_candidates(
     anchor_field,
     liquidity_manifest=None,
 ):
+    liquidity_filter_enabled = daily_notional_min is not None
     metadata = {row["symbol"]: row for row in universe}
     qualified = []
     coverage_exclusions = {
@@ -217,17 +218,31 @@ def build_spot_candidates(
         else:
             liquidity = liquidity_manifest.get("symbols", {}).get(symbol)
             if liquidity is None:
-                coverage_exclusions["missing_liquidity_manifest"] += 1
-                continue
-            session_notionals = liquidity.get("session_notionals_usd", {})
+                if liquidity_filter_enabled:
+                    coverage_exclusions["missing_liquidity_manifest"] += 1
+                    continue
+                weekly["notional"] = np.nan
+                liquidity = None
+            if liquidity is None:
+                session_notionals = {}
+            else:
+                session_notionals = liquidity.get("session_notionals_usd", {})
             if any(str(trade_date) not in session_notionals for trade_date in week_dates):
-                coverage_exclusions["missing_liquidity_manifest"] += 1
-                continue
-            weekly["notional"] = [
-                float(session_notionals[str(trade_date)]) for trade_date in week_dates
-            ]
-        min_notional = float(weekly["notional"].min())
-        if not np.isfinite(min_notional) or min_notional <= daily_notional_min:
+                if liquidity_filter_enabled:
+                    coverage_exclusions["missing_liquidity_manifest"] += 1
+                    continue
+                weekly["notional"] = np.nan
+            else:
+                weekly["notional"] = [
+                    float(session_notionals[str(trade_date)]) for trade_date in week_dates
+                ]
+        notionals = pd.to_numeric(weekly["notional"], errors="coerce")
+        complete_notionals = bool(np.isfinite(notionals).all())
+        min_notional = float(notionals.min()) if complete_notionals else None
+        average_notional = float(notionals.mean()) if complete_notionals else None
+        if liquidity_filter_enabled and (
+            min_notional is None or min_notional <= daily_notional_min
+        ):
             coverage_exclusions["liquidity"] += 1
             continue
 
@@ -238,7 +253,11 @@ def build_spot_candidates(
                 "date": str(trade_date),
                 "close": close,
                 "cumulative_log_return_pct": 100 * math.log(close / anchor_price),
-                "daily_notional_usd": float(weekly.loc[trade_date, "notional"]),
+                "daily_notional_usd": (
+                    float(weekly.loc[trade_date, "notional"])
+                    if np.isfinite(weekly.loc[trade_date, "notional"])
+                    else None
+                ),
             })
 
         meta = metadata[symbol]
@@ -254,17 +273,23 @@ def build_spot_candidates(
             "weekly_return_pct": 100 * (path[-1]["close"] / anchor_price - 1),
             "weekly_log_return_pct": path[-1]["cumulative_log_return_pct"],
             "minimum_daily_notional_usd": min_notional,
-            "average_daily_notional_usd": float(weekly["notional"].mean()),
+            "average_daily_notional_usd": average_notional,
             "path": path,
         })
 
-    qualified.sort(
-        key=lambda row: (row["minimum_daily_notional_usd"], row["market_cap_usd"]),
-        reverse=True,
-    )
-    capped = len(qualified) > candidate_target
-    selected = qualified[:candidate_target]
-    effective_notional = daily_notional_min
+    if liquidity_filter_enabled or candidate_target is not None:
+        qualified.sort(
+            key=lambda row: (
+                row["minimum_daily_notional_usd"] or 0,
+                row["market_cap_usd"],
+            ),
+            reverse=True,
+        )
+    else:
+        qualified.sort(key=lambda row: row["ticker"])
+    capped = candidate_target is not None and len(qualified) > candidate_target
+    selected = qualified[:candidate_target] if candidate_target is not None else qualified
+    effective_notional = daily_notional_min if liquidity_filter_enabled else None
     if capped and selected:
         effective_notional = selected[-1]["minimum_daily_notional_usd"]
     return qualified, selected, effective_notional, capped, coverage_exclusions
@@ -899,13 +924,18 @@ def main():
             "excluded_counts": exclusions,
         },
         "pre_option_filter": {
+            "liquidity_filter_enabled": args.daily_notional_min is not None,
             "requested_minimum_notional_each_session_usd": args.daily_notional_min,
             "candidate_target": args.candidate_target,
             "symbols_passing_fixed_floors": len(qualified),
             "symbols_sent_to_options": len(candidates),
             "target_cap_applied": capped,
             "effective_minimum_notional_usd": effective_notional,
-            "cap_tie_break": "Minimum daily notional descending, then market capitalization descending.",
+            "selection_order": (
+                "Minimum daily notional descending, then market capitalization descending."
+                if args.daily_notional_min is not None or args.candidate_target is not None
+                else "Ticker ascending; every stock passing market-cap, type, and price-data checks is sent to options."
+            ),
             "notional_formula": (
                 liquidity_manifest.get("notional_formula")
                 if liquidity_manifest
@@ -992,7 +1022,7 @@ def main():
         "candidate_manifest": manifest,
         "results": top,
         "caveats": [
-            "Market capitalization is point-in-time metadata from Nasdaq's public screener, while returns, liquidity, and option quotes are from Databento.",
+            "Market capitalization is point-in-time metadata from Nasdaq's public screener, while returns and option quotes are from Databento.",
             *(
                 ["EQUS.MINI spot values are derived from a subset of US equity venues. The opening price is the first observed blended regular-session trade, the close is the last observed trade before 16:00 ET, and volume is not full consolidated volume."]
                 if args.spot_dataset == "EQUS.MINI"

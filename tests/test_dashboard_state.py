@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -11,7 +12,9 @@ from scripts.dashboard_state import (
     atomic_write_json,
     build_mock_bundle,
     build_refresh_plan,
+    screening_policy_fingerprint,
     validate_bundle,
+    validate_expiry_horizon,
 )
 
 
@@ -33,6 +36,13 @@ class RefreshPlanTests(unittest.TestCase):
     def test_refresh_uses_consolidated_daily_liquidity_by_default(self):
         self.assertEqual(RefreshSettings().spot_dataset, "EQUS.SUMMARY")
 
+    def test_default_screen_has_no_liquidity_gate_or_candidate_cap(self):
+        settings = RefreshSettings()
+        self.assertEqual(settings.market_cap_min, 5_000_000_000)
+        self.assertIsNone(settings.daily_notional_min)
+        self.assertIsNone(settings.candidate_target)
+        self.assertEqual(settings.max_expiry_dte_days, 7)
+
     def test_friday_premarket_uses_thursday_as_completed_session(self):
         plan = build_refresh_plan(datetime(2026, 8, 28, 12, 0, tzinfo=UTC))
         self.assertEqual(plan.completed_session, "2026-08-27")
@@ -45,6 +55,12 @@ class RefreshPlanTests(unittest.TestCase):
         self.assertEqual(plan.completed_session, "2026-08-28")
         self.assertEqual(plan.next_session, "2026-08-31")
         self.assertEqual(plan.option_expiry, "2026-09-04")
+        validate_expiry_horizon(plan, RefreshSettings())
+
+    def test_expiry_horizon_rejects_more_than_seven_calendar_days(self):
+        plan = replace(sample_plan(), option_expiry="2026-09-04")
+        with self.assertRaisesRegex(ValueError, "1 through 7"):
+            validate_expiry_horizon(plan, RefreshSettings())
 
     def test_exchange_holiday_moves_weekly_expiry_to_prior_session(self):
         plan = build_refresh_plan(datetime(2026, 4, 1, 21, 0, tzinfo=UTC))
@@ -76,6 +92,26 @@ class DashboardStateManagerTests(unittest.TestCase):
         state = manager.ensure_state(self.plan)
         self.assertEqual(state["cache"]["status"], "fresh")
         self.assertEqual(state["cache"]["source"], "cache")
+
+    def test_same_date_cache_from_an_old_policy_is_refreshed(self):
+        old = build_mock_bundle(self.plan)
+        old["screening_policy_fingerprint"] = "old-policy"
+        atomic_write_json(self.cache, old)
+        calls = []
+        manager = DashboardStateManager(
+            self.cache,
+            refresh=lambda plan: calls.append(plan.completed_session)
+            or build_mock_bundle(plan),
+        )
+
+        state = manager.ensure_state(self.plan)
+
+        self.assertEqual(calls, ["2026-08-27"])
+        self.assertEqual(state["cache"]["source"], "refresh")
+        self.assertEqual(
+            state["screening_policy_fingerprint"],
+            screening_policy_fingerprint(),
+        )
 
     def test_legacy_cache_restores_completed_session_move(self):
         bundle = build_mock_bundle(self.plan)
