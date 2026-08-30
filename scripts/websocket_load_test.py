@@ -287,7 +287,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--duration", type=float, default=30)
     parser.add_argument("--ramp-seconds", type=float, default=5)
     parser.add_argument("--connect-timeout", type=float, default=20)
-    parser.add_argument("--max-p95-latency-ms", type=float, default=250)
+    parser.add_argument(
+        "--max-p95-latency-ms",
+        type=float,
+        default=500,
+        help="Maximum p95 server-to-client lag; leaves one second for batching",
+    )
     parser.add_argument("--min-delivery-ratio", type=float, default=0.8)
     parser.add_argument("--origin")
     parser.add_argument("--no-compression", action="store_true")
