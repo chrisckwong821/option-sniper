@@ -44,4 +44,18 @@ assert.equal(
 const fridayPremarket = SigmaMath.calculateLiveMetrics(104, 100, 2);
 assert.ok(Math.abs(fridayPremarket.zScore - (Math.log(1.04) / 0.02)) < 1e-12);
 
+const rows = Array.from({ length: 45 }, (_, index) => index + 1);
+assert.deepEqual(SigmaMath.paginateRows(rows, 2, 20), {
+  end: 40,
+  items: rows.slice(20, 40),
+  offset: 20,
+  page: 2,
+  pageSize: 20,
+  start: 21,
+  total: 45,
+  totalPages: 3,
+});
+assert.equal(SigmaMath.paginateRows(rows, 99, 20).page, 3);
+assert.equal(SigmaMath.paginateRows([], 1, 20).start, 0);
+
 console.log("live calculations: ok");

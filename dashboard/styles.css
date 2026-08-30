@@ -333,6 +333,59 @@ h2 {
   overflow: visible;
 }
 
+.pagination {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  padding-top: 12px;
+}
+
+.pagination[hidden] {
+  display: none;
+}
+
+.pagination-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pagination-controls {
+  display: flex;
+  gap: 6px;
+}
+
+.pagination-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pagination-button:hover:not(:disabled) {
+  border-color: var(--cyan);
+  background: var(--surface-active);
+}
+
+.pagination-button:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.pagination-button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -809,6 +862,10 @@ footer {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 10px;
+  }
+
+  .pagination {
+    justify-content: space-between;
   }
 
   .table-heading > div:first-child {

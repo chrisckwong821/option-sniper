@@ -61,12 +61,32 @@
       || payloadAnchorDate === targetCompletedSession;
   }
 
+  function paginateRows(rows, requestedPage, requestedPageSize) {
+    const values = Array.isArray(rows) ? rows : [];
+    const pageSize = Math.max(1, Math.floor(Number(requestedPageSize)) || 20);
+    const totalPages = Math.max(1, Math.ceil(values.length / pageSize));
+    const page = Math.min(totalPages, Math.max(1, Math.floor(Number(requestedPage)) || 1));
+    const offset = (page - 1) * pageSize;
+    const items = values.slice(offset, offset + pageSize);
+    return {
+      end: offset + items.length,
+      items,
+      offset,
+      page,
+      pageSize,
+      start: items.length ? offset + 1 : 0,
+      total: values.length,
+      totalPages,
+    };
+  }
+
   return Object.freeze({
     calculateLiveMetrics,
     calculatePriceChange,
     isCurrentAnchor,
     isNewerPrice,
     isPriceForTradingDate,
+    paginateRows,
     sessionLabel,
   });
 });

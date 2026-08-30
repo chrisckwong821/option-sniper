@@ -10,7 +10,12 @@ const state = {
   threshold: "all",
   viewSettings: {
     yesterday: { sortKey: "original_rank", sortDirection: "asc" },
-    today: { sortKey: "abs_z_score", sortDirection: "desc" },
+    today: {
+      page: 1,
+      pageSize: 20,
+      sortKey: "abs_z_score",
+      sortDirection: "desc",
+    },
   },
   live: {
     socket: null,
@@ -59,6 +64,8 @@ const elements = {
   announcer: document.querySelector("#live-announcer"),
   absoluteRank: document.querySelector('[data-sort="abs_z_score"]'),
   savedRank: document.querySelector('[data-sort="original_rank"]'),
+  todayPagination: document.querySelector("#pagination-today"),
+  todayPageLabel: document.querySelector("#page-label-today"),
 };
 
 function escapeHtml(value) {
@@ -186,8 +193,7 @@ function visibleRows(view = state.view) {
       };
       const primary = (sortValue(a) - sortValue(b)) * direction;
       return primary || (b.z_score - a.z_score);
-    })
-    .slice(0, 20);
+    });
 }
 
 function extendedPriceState(row) {
@@ -365,20 +371,37 @@ function renderTable(view) {
   if (!payload) return [];
   const table = elements.tables[view];
   const settings = state.viewSettings[view];
-  const rows = visibleRows(view);
+  const matchingRows = visibleRows(view);
+  const pagination = view === "today"
+    ? window.SigmaMath.paginateRows(matchingRows, settings.page, settings.pageSize)
+    : window.SigmaMath.paginateRows(matchingRows, 1, Math.max(1, matchingRows.length));
+  const rows = pagination.items;
+  if (view === "today") settings.page = pagination.page;
   const observedRows = payload.rows.filter((row) => row.price_source).length;
 
   table.rows.innerHTML = rows.map((row, index) => rowMarkup(
     row,
     view === "yesterday" && settings.sortKey === "original_rank"
       ? row.original_rank
-      : index + 1,
+      : pagination.offset + index + 1,
   )).join("");
   table.empty.hidden = rows.length > 0;
-  table.resultCount.textContent = `${rows.length} of ${payload.rows.length}`;
+  table.resultCount.textContent = view === "today"
+    ? `${pagination.start}-${pagination.end} of ${pagination.total}`
+    : `${matchingRows.length} of ${payload.rows.length}`;
   table.methodLine.textContent = view === "today"
     ? `${observedRows} of ${payload.rows.length} current-session prices · ranked by ${sortLabel(view)}`
     : `Fixed 20-name list · ranked by ${sortLabel(view)}`;
+  if (view === "today") {
+    elements.todayPagination.hidden = pagination.totalPages <= 1;
+    elements.todayPageLabel.textContent = `Page ${pagination.page} of ${pagination.totalPages}`;
+    elements.todayPagination.querySelectorAll("button").forEach((button) => {
+      const backward = ["first", "previous"].includes(button.dataset.pageAction);
+      button.disabled = backward
+        ? pagination.page === 1
+        : pagination.page === pagination.totalPages;
+    });
+  }
   return rows;
 }
 
@@ -386,11 +409,12 @@ function render() {
   const payload = activePayload();
   if (!payload) return;
   renderTable(state.view === "yesterday" ? "today" : "yesterday");
-  const rows = renderTable(state.view);
-  const top = rows[0];
+  renderTable(state.view);
+  const matchingRows = visibleRows(state.view);
+  const top = matchingRows[0];
   const mix = payload.reliability_mix || {};
   const liveTimestamp = latestVisibleTimestamp(payload.rows);
-  const outsideCount = rows.filter((row) => (
+  const outsideCount = matchingRows.filter((row) => (
     state.view === "today" ? Math.abs(row.z_score) > 1 : row.z_score > 1
   )).length;
 
@@ -398,7 +422,7 @@ function render() {
   elements.topSignal.dataset.direction = top && top.z_score < 0 ? "negative" : "positive";
   elements.topTicker.textContent = top?.ticker || "No matching movers";
   elements.outsideCount.textContent = outsideCount;
-  elements.coverageCount.textContent = payload.valid_iv_coverage;
+  elements.coverageCount.textContent = payload.rows.length;
   elements.reliabilityMix.textContent = `${mix.high || 0} high / ${mix.medium || 0} medium / ${mix.low || 0} low`;
   elements.sessionDate.textContent = formatDate(state.live.dataDate || payload.data_date);
   elements.lastUpdate.textContent = formatUpdate(liveTimestamp || payload.last_update_utc);
@@ -448,6 +472,7 @@ function setSort(sortKey) {
     settings.sortKey = sortKey;
     settings.sortDirection = "desc";
   }
+  if (state.view === "today") settings.page = 1;
   render();
 }
 
@@ -597,6 +622,7 @@ document.querySelectorAll(".view-button").forEach((button) => {
 document.querySelectorAll(".threshold-button").forEach((button) => {
   button.addEventListener("click", () => {
     state.threshold = button.dataset.threshold;
+    state.viewSettings.today.page = 1;
     document.querySelectorAll(".threshold-button").forEach((item) => item.classList.toggle("active", item === button));
     render();
   });
@@ -604,19 +630,42 @@ document.querySelectorAll(".threshold-button").forEach((button) => {
 
 elements.search.addEventListener("input", (event) => {
   state.search = event.target.value.trim().toLowerCase();
+  state.viewSettings.today.page = 1;
   render();
 });
 elements.search.addEventListener("change", (event) => {
   state.search = event.target.value.trim().toLowerCase();
+  state.viewSettings.today.page = 1;
   render();
 });
 elements.sector.addEventListener("change", (event) => {
   state.sector = event.target.value;
+  state.viewSettings.today.page = 1;
   render();
 });
 elements.reliability.addEventListener("change", (event) => {
   state.reliability = event.target.value;
+  state.viewSettings.today.page = 1;
   render();
+});
+
+elements.todayPagination.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-page-action]");
+  if (!button || button.disabled) return;
+  const settings = state.viewSettings.today;
+  const totalPages = Math.max(
+    1,
+    Math.ceil(visibleRows("today").length / settings.pageSize),
+  );
+  const nextPage = {
+    first: 1,
+    previous: settings.page - 1,
+    next: settings.page + 1,
+    last: totalPages,
+  }[button.dataset.pageAction];
+  settings.page = Math.min(totalPages, Math.max(1, nextPage));
+  render();
+  elements.tables.today.panel.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
 document.addEventListener("visibilitychange", () => {
