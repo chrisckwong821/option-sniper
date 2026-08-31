@@ -753,23 +753,6 @@ function scheduleReconnect() {
   state.live.retryTimer = window.setTimeout(connectLivePrices, delay);
 }
 
-async function reloadForNewDashboardAnchor() {
-  try {
-    const response = await fetch(`/api/state?t=${Date.now()}`, { cache: "no-store" });
-    if (!response.ok) return false;
-    const bundle = await response.json();
-    const currentAnchor = state.todayPayload?.anchor_date;
-    const nextAnchor = bundle.today?.anchor_date;
-    if (currentAnchor && nextAnchor && currentAnchor !== nextAnchor) {
-      window.location.reload();
-      return true;
-    }
-  } catch (_) {
-    // The WebSocket retry loop remains responsible for transient outages.
-  }
-  return false;
-}
-
 function connectLivePrices() {
   if (!state.payload || !state.todayPayload || document.visibilityState === "hidden") return;
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -778,13 +761,12 @@ function connectLivePrices() {
   const socket = new WebSocket(url);
   state.live.socket = socket;
 
-  socket.addEventListener("open", async () => {
+  socket.addEventListener("open", () => {
     state.live.connected = true;
     state.live.retryAttempt = 0;
     state.live.lastMessageAt = Date.now();
     state.live.sequence = null;
     setConnectionState("connecting", "Syncing");
-    await reloadForNewDashboardAnchor();
   });
   socket.addEventListener("message", (event) => {
     try {
