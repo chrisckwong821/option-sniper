@@ -46,6 +46,7 @@ def build_payload(screen: dict, company_basics: dict | None = None) -> dict:
             "annualized_implied_vol_pct": candidate["annualized_implied_vol_pct"],
             "iv_reliability": candidate["iv_reliability"],
             "outside_one_sigma": abs(candidate["realized_horizon_implied_z"]) > 1,
+            "prior_session_date": screen["requested_window"]["start_date"],
             "prior_session_gain_pct": candidate["weekly_return_pct"],
             "prior_session_z_score": candidate["realized_horizon_implied_z"],
         })
@@ -57,6 +58,7 @@ def build_payload(screen: dict, company_basics: dict | None = None) -> dict:
         "view": "today_movers",
         "data_date": screen["requested_window"]["end_date"],
         "anchor_date": screen["requested_window"]["end_date"],
+        "prior_session_date": screen["requested_window"]["start_date"],
         "last_update_utc": f"{screen['requested_window']['end_date']}T20:00:00+00:00",
         "price_source": screen["market_data"]["spot"]["dataset"],
         "iv_snapshot_time": screen["market_data"]["options"]["snapshot_observation_time"],

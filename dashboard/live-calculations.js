@@ -29,6 +29,23 @@
     };
   }
 
+  function primaryGainPct(view, row) {
+    const candidates = view === "yesterday"
+      ? [row.saved_gain_pct, row.snapshot_gain_pct, row.gain_pct]
+      : [
+        row.regular_gain_pct,
+        row.prior_session_gain_pct,
+        row.snapshot_gain_pct,
+        row.gain_pct,
+      ];
+    for (const value of candidates) {
+      if (value === null || value === undefined || value === "") continue;
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return 0;
+  }
+
   function sessionLabel(session) {
     return ({
       regular: "Regular",
@@ -119,6 +136,7 @@
     isNewerPrice,
     isPriceForTradingDate,
     paginateRows,
+    primaryGainPct,
     sessionLabel,
     streamSequenceDecision,
   });

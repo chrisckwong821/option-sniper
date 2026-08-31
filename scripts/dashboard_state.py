@@ -185,6 +185,37 @@ def validate_bundle(bundle: Any) -> dict[str, Any]:
     return bundle
 
 
+def has_complete_prior_session_metrics(
+    bundle: dict[str, Any],
+    plan: RefreshPlan,
+) -> bool:
+    today = bundle["today"]
+    if today.get("prior_session_date") != plan.prior_session:
+        return False
+    for row in today["rows"]:
+        if row.get("prior_session_date") != plan.prior_session:
+            return False
+        values = (
+            row.get("prior_close_price"),
+            row.get("live_anchor_price") or row.get("anchor_price"),
+            row.get("prior_session_gain_pct"),
+        )
+        try:
+            prior_close, live_anchor, prior_gain = map(float, values)
+        except (TypeError, ValueError):
+            return False
+        if (
+            prior_close <= 0
+            or live_anchor <= 0
+            or not all(
+                math.isfinite(value)
+                for value in (prior_close, live_anchor, prior_gain)
+            )
+        ):
+            return False
+    return True
+
+
 def hydrate_completed_session_metrics(bundle: dict[str, Any]) -> dict[str, Any]:
     """Upgrade cached live-universe rows created before completed moves were shown."""
     for row in bundle["today"]["rows"]:
@@ -348,6 +379,7 @@ def build_mock_bundle(
             "annualized_implied_vol_pct": sigma * (365 ** 0.5),
             "iv_reliability": reliabilities[index % len(reliabilities)],
             "outside_one_sigma": abs(prior_z) > 1,
+            "prior_session_date": plan.prior_session,
             "prior_session_gain_pct": prior_gain,
             "prior_session_z_score": prior_z,
         })
@@ -368,6 +400,7 @@ def build_mock_bundle(
     today = {
         **shared,
         "view": "today_movers",
+        "prior_session_date": plan.prior_session,
         "valid_iv_coverage": len(today_rows),
         "reliability_mix": reliability_mix,
         "live_calculation": {
@@ -480,6 +513,7 @@ class DashboardStateManager:
             and cached["today"].get("anchor_date") == plan.completed_session
             and cached.get("screening_policy_fingerprint")
             == self.expected_policy_fingerprint
+            and has_complete_prior_session_metrics(cached, plan)
         )
         if fresh and mode != "force":
             return self._with_runtime_cache(cached, plan, "fresh", "cache")
@@ -493,6 +527,8 @@ class DashboardStateManager:
             refreshed = hydrate_completed_session_metrics(validate_bundle(self.refresh(plan)))
             if refreshed["snapshot"].get("data_date") != plan.completed_session:
                 raise ValueError("Refresh did not produce the target completed session")
+            if not has_complete_prior_session_metrics(refreshed, plan):
+                raise ValueError("Refresh did not produce complete prior-session metrics")
             if (
                 refreshed.get("screening_policy_fingerprint")
                 != self.expected_policy_fingerprint

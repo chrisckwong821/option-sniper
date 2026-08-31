@@ -161,10 +161,7 @@ function allRows() {
 }
 
 function displayGainPct(row, view) {
-  if (view === "yesterday") {
-    return Number(row.saved_gain_pct ?? row.snapshot_gain_pct ?? row.gain_pct);
-  }
-  return Number(row.gain_pct);
+  return window.SigmaMath.primaryGainPct(view, row);
 }
 
 function visibleRows(view = state.view) {
@@ -259,9 +256,7 @@ function priceStackMarkup(row, includeExtendedChange = false) {
 
 function gainStackMarkup(row) {
   const isSavedList = row.dashboard_view === "yesterday";
-  const regularGain = isSavedList
-    ? Number(row.saved_gain_pct ?? row.snapshot_gain_pct ?? row.gain_pct)
-    : Number(row.regular_gain_pct ?? row.snapshot_gain_pct ?? row.gain_pct);
+  const regularGain = window.SigmaMath.primaryGainPct(row.dashboard_view, row);
   const regularDirection = regularGain >= 0 ? "positive" : "negative";
   const regularLabel = isSavedList
     ? "Saved gain"
@@ -710,7 +705,7 @@ function initializeRows(payload, view) {
       row.regular_timestamp = payload.last_update_utc;
       row.regular_source = payload.price_source;
       row.regular_is_live = false;
-      row.regular_gain_pct = row.gain_pct;
+      row.regular_gain_pct = window.SigmaMath.primaryGainPct(view, row);
       row.extended_price = null;
       row.extended_timestamp = null;
       row.extended_session = null;

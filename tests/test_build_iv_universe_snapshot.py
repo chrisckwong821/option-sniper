@@ -43,6 +43,8 @@ class IvUniverseSnapshotTests(unittest.TestCase):
         self.assertEqual(payload["rows"][0]["anchor_price"], 105.0)
         self.assertEqual(payload["rows"][0]["prior_close_price"], 100.0)
         self.assertEqual(payload["rows"][0]["live_anchor_price"], 105.0)
+        self.assertEqual(payload["prior_session_date"], "2026-08-26")
+        self.assertEqual(payload["rows"][0]["prior_session_date"], "2026-08-26")
         self.assertEqual(payload["rows"][0]["gain_pct"], 5.0)
         self.assertEqual(payload["rows"][0]["z_score"], 1.2)
         self.assertTrue(payload["rows"][0]["outside_one_sigma"])

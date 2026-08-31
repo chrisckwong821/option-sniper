@@ -113,6 +113,22 @@ class DashboardStateManagerTests(unittest.TestCase):
             screening_policy_fingerprint(),
         )
 
+    def test_same_date_cache_without_prior_session_provenance_is_refreshed(self):
+        incomplete = build_mock_bundle(self.plan)
+        incomplete["today"].pop("prior_session_date")
+        atomic_write_json(self.cache, incomplete)
+        calls = []
+        manager = DashboardStateManager(
+            self.cache,
+            refresh=lambda plan: calls.append(plan.completed_session)
+            or build_mock_bundle(plan),
+        )
+
+        state = manager.ensure_state(self.plan)
+
+        self.assertEqual(calls, ["2026-08-27"])
+        self.assertEqual(state["cache"]["source"], "refresh")
+
     def test_legacy_cache_restores_completed_session_move(self):
         bundle = build_mock_bundle(self.plan)
         expected = bundle["today"]["rows"][0]

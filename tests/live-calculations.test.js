@@ -15,6 +15,23 @@ assert.ok(Math.abs(premarket.absolute - (-0.09)) < 1e-10);
 assert.ok(Math.abs(premarket.percent - (-0.03948061063344932)) < 1e-10);
 assert.equal(SigmaMath.calculatePriceChange(0, 227.96), null);
 
+const premarketRow = {
+  gain_pct: -0.8,
+  prior_session_gain_pct: 3.25,
+  regular_gain_pct: 3.25,
+};
+const premarketLiveMetrics = SigmaMath.calculateLiveMetrics(99.2, 100, 2);
+premarketRow.gain_pct = premarketLiveMetrics.gainPct;
+premarketRow.z_score = premarketLiveMetrics.zScore;
+assert.equal(SigmaMath.primaryGainPct("today", premarketRow), 3.25);
+assert.ok(premarketRow.z_score < 0);
+premarketRow.regular_gain_pct = 0.4;
+assert.equal(SigmaMath.primaryGainPct("today", premarketRow), 0.4);
+assert.equal(SigmaMath.primaryGainPct("yesterday", {
+  gain_pct: -0.8,
+  saved_gain_pct: 5.5,
+}), 5.5);
+
 assert.equal(
   SigmaMath.isNewerPrice("2026-08-28T13:30:01Z", "2026-08-28T13:30:00Z"),
   true,
