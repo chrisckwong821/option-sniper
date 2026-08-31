@@ -32,6 +32,27 @@ assert.ok(Math.abs(weekdayHorizon.calendarDays - 1) < 1e-12);
 assert.equal(SigmaMath.calculateSigmaHorizon(0, 33), null);
 assert.equal(SigmaMath.sigmaHorizonEnd("invalid", weekendHorizon), null);
 
+const afterHoursDisplay = SigmaMath.postCloseDisplayMetrics("today", "afterhours", {
+  extended_price: 101,
+  extended_session: "afterhours",
+  regular_price: 100,
+  sigma_1d_pct: 2,
+});
+assert.equal(afterHoursDisplay.hasPrice, true);
+assert.ok(Math.abs(afterHoursDisplay.gainPct - 1) < 1e-12);
+assert.ok(Math.abs(afterHoursDisplay.zScore - (Math.log(1.01) / 0.02)) < 1e-12);
+assert.equal(
+  SigmaMath.postCloseDisplayMetrics("today", "overnight", {
+    extended_price: 101,
+    extended_session: "afterhours",
+    regular_price: 100,
+    sigma_1d_pct: 2,
+  }).hasPrice,
+  false,
+);
+assert.equal(SigmaMath.postCloseDisplayMetrics("today", "premarket", {}), null);
+assert.equal(SigmaMath.postCloseDisplayMetrics("yesterday", "afterhours", {}), null);
+
 const premarketRow = {
   gain_pct: -0.8,
   prior_session_gain_pct: 3.25,

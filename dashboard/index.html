@@ -134,10 +134,10 @@
                 <th>Company</th>
                 <th>Sector</th>
                 <th class="numeric"><button class="sort-button" data-sort="market_cap_usd" type="button">Market cap</button></th>
-                <th class="numeric"><span class="term-tip label-tip" tabindex="0" data-tooltip="Prior regular-session close on top. Before the open, the lower line shows the newest valid overnight or pre-market price used for today's Z-score.">Last</span></th>
-                <th class="numeric"><button class="sort-button term-tip" data-sort="gain_pct" data-tooltip="The latest completed session's close-to-close move. Once the next session trades, this updates versus that completed close; pre-market and overnight moves appear separately." type="button">Gain</button></th>
+                <th class="numeric"><span class="term-tip label-tip" tabindex="0" data-tooltip="During after-hours and overnight trading, only the active extended-hours quote is shown. The latest regular close is retained internally as its return anchor.">Last</span></th>
+                <th class="numeric"><button class="sort-button term-tip" data-sort="gain_pct" data-tooltip="During after-hours and overnight trading, this is the active session's move versus the latest regular close; the prior regular-session move is omitted." type="button">Gain</button></th>
                 <th class="numeric"><button class="sort-button term-tip" data-sort="sigma_1d_pct" data-tooltip="Option-implied expected move from the latest regular close to the target close. Annualized IV is scaled by sqrt(actual elapsed calendar time / 365), so weekends and market holidays use a longer horizon." type="button">Expected &sigma;</button></th>
-                <th><button class="sort-button term-tip active" data-sort="z_score" data-tooltip="Live log return since the latest regular close divided by Expected sigma for the full next-close horizon. Premarket and intraday returns are partial moves compared with that full-horizon expectation." type="button">Z-score</button></th>
+                <th><button class="sort-button term-tip active" data-sort="z_score" data-tooltip="Live log return since the latest regular close divided by Expected sigma for the full next-close horizon. Extended-hours and intraday returns are partial moves compared with that full-horizon expectation." type="button">Z-score</button></th>
                 <th><span class="term-tip label-tip" tabindex="0" data-tooltip="Confidence in the IV denominator. High uses several tight two-sided strikes; medium has more spread sensitivity; low is provisional.">IV Reliability</span></th>
               </tr>
             </thead>
@@ -162,7 +162,7 @@
       <span id="iv-note">IV snapshot --</span>
     </footer>
     <div id="live-announcer" class="visually-hidden" aria-live="polite"></div>
-    <script src="live-calculations.js?v=20260831-expected-sigma"></script>
-    <script src="app.js?v=20260831-expected-sigma"></script>
+    <script src="live-calculations.js?v=20260901-post-close"></script>
+    <script src="app.js?v=20260901-post-close"></script>
   </body>
 </html>

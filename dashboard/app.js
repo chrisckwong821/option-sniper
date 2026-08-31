@@ -238,8 +238,20 @@ function allRows() {
     .flatMap((payload) => payload.rows);
 }
 
-function displayGainPct(row, view) {
-  return window.SigmaMath.primaryGainPct(view, row);
+function rowDisplayMetrics(row, view = row.dashboard_view) {
+  const postClose = window.SigmaMath.postCloseDisplayMetrics(
+    view,
+    state.live.marketSession,
+    row,
+  );
+  if (postClose) return postClose;
+  const zScore = Number(row.z_score);
+  return {
+    gainPct: window.SigmaMath.primaryGainPct(view, row),
+    hasPrice: true,
+    isPostClose: false,
+    zScore: Number.isFinite(zScore) ? zScore : null,
+  };
 }
 
 function visibleRows(view = state.view) {
@@ -254,21 +266,37 @@ function visibleRows(view = state.view) {
       if (state.search && !haystack.includes(state.search)) return false;
       if (state.sector !== "all" && row.sector !== state.sector) return false;
       if (state.reliability !== "all" && qualityRank[row.iv_reliability] < qualityRank[state.reliability]) return false;
-      const thresholdZ = view === "today" ? Math.abs(row.z_score) : row.z_score;
-      if (state.threshold === "one" && thresholdZ <= 1) return false;
-      if (state.threshold === "two" && thresholdZ <= 2) return false;
+      const display = rowDisplayMetrics(row, view);
+      const thresholdZ = Number.isFinite(display.zScore)
+        ? view === "today" ? Math.abs(display.zScore) : display.zScore
+        : null;
+      if (state.threshold === "one" && !(thresholdZ > 1)) return false;
+      if (state.threshold === "two" && !(thresholdZ > 2)) return false;
       return true;
     })
     .sort((a, b) => {
       const sortValue = (row) => {
+        const display = rowDisplayMetrics(row, view);
         if (settings.sortKey === "gain_pct") {
-          return displayGainPct(row, view);
+          return display.gainPct;
         }
-        if (settings.sortKey === "abs_z_score") return Math.abs(Number(row.z_score));
+        if (settings.sortKey === "abs_z_score") {
+          return Number.isFinite(display.zScore) ? Math.abs(display.zScore) : null;
+        }
+        if (settings.sortKey === "z_score") return display.zScore;
         return Number(row[settings.sortKey]);
       };
-      const primary = (sortValue(a) - sortValue(b)) * direction;
-      return primary || (b.z_score - a.z_score);
+      const aValue = sortValue(a);
+      const bValue = sortValue(b);
+      const aValid = Number.isFinite(aValue);
+      const bValid = Number.isFinite(bValue);
+      if (aValid !== bValid) return aValid ? -1 : 1;
+      if (!aValid) return a.ticker.localeCompare(b.ticker);
+      const primary = (aValue - bValue) * direction;
+      const aZ = rowDisplayMetrics(a, view).zScore;
+      const bZ = rowDisplayMetrics(b, view).zScore;
+      const zTieBreak = Number.isFinite(aZ) && Number.isFinite(bZ) ? bZ - aZ : 0;
+      return primary || zTieBreak || a.ticker.localeCompare(b.ticker);
     });
 }
 
@@ -286,6 +314,8 @@ function extendedPriceState(row) {
       ? window.SigmaMath.calculatePriceChange(row.extended_price, regularPrice)
       : null,
     extendedSession,
+    hasActiveExtendedPrice: hasExtendedPrice
+      && (!activeExtendedSession || extendedSession === activeExtendedSession),
     hasExtendedPrice,
     regularPrice,
   };
@@ -293,6 +323,27 @@ function extendedPriceState(row) {
 
 function priceStackMarkup(row, includeExtendedChange = false) {
   const priceState = extendedPriceState(row);
+  const display = rowDisplayMetrics(row);
+  if (display.isPostClose) {
+    const sessionLabel = window.SigmaMath.sessionLabel(state.live.marketSession);
+    if (!display.hasPrice || !priceState.hasActiveExtendedPrice) {
+      return `
+        <span class="price-stack">
+          <span class="price-primary">
+            <span class="no-session-trade">No trades</span>
+            <span class="price-session ${escapeHtml(state.live.marketSession)}">${escapeHtml(sessionLabel)}</span>
+          </span>
+        </span>`;
+    }
+    const extendedTime = formatPriceTime(row.extended_timestamp);
+    return `
+      <span class="price-stack">
+        <span class="price-primary">
+          <span class="number">$${formatNumber(row.extended_price)}</span>
+          <span class="price-session ${escapeHtml(priceState.extendedSession)}">${escapeHtml(`${sessionLabel}${extendedTime ? ` · ${extendedTime}` : ""}`)}</span>
+        </span>
+      </span>`;
+  }
   const regularTime = formatPriceTime(row.regular_timestamp);
   const regularLabel = `${row.regular_is_live ? "Regular" : "Prior close"}${regularTime ? ` · ${regularTime}` : ""}`;
 
@@ -334,6 +385,27 @@ function priceStackMarkup(row, includeExtendedChange = false) {
 
 function gainStackMarkup(row) {
   const isSavedList = row.dashboard_view === "yesterday";
+  const display = rowDisplayMetrics(row);
+  if (display.isPostClose) {
+    const sessionLabel = window.SigmaMath.sessionLabel(state.live.marketSession);
+    if (!display.hasPrice) {
+      return `
+        <span class="gain-stack">
+          <span class="gain-primary">
+            <span class="number movement">--</span>
+            <span class="gain-session ${escapeHtml(state.live.marketSession)}">${escapeHtml(sessionLabel)}</span>
+          </span>
+        </span>`;
+    }
+    const direction = display.gainPct >= 0 ? "positive" : "negative";
+    return `
+      <span class="gain-stack">
+        <span class="gain-primary">
+          <span class="number movement ${direction}">${formatSigned(display.gainPct, 2, "%")}</span>
+          <span class="gain-session ${escapeHtml(state.live.marketSession)}">${escapeHtml(sessionLabel)}</span>
+        </span>
+      </span>`;
+  }
   const regularGain = window.SigmaMath.primaryGainPct(row.dashboard_view, row);
   const regularDirection = regularGain >= 0 ? "positive" : "negative";
   const regularLabel = isSavedList
@@ -362,14 +434,16 @@ function gainStackMarkup(row) {
 }
 
 function rowMarkup(row, viewRank) {
-  const width = Math.min(100, Math.max(2, (Math.abs(row.z_score) / 4) * 100));
+  const display = rowDisplayMetrics(row);
+  const hasZScore = Number.isFinite(display.zScore);
+  const width = hasZScore ? Math.min(100, Math.max(2, (Math.abs(display.zScore) / 4) * 100)) : 0;
   const reliability = escapeHtml(row.iv_reliability);
-  const direction = row.gain_pct >= 0 ? "positive" : "negative";
+  const direction = display.gainPct >= 0 ? "positive" : "negative";
   const priceTitle = row.price_timestamp
     ? `Updated ${formatUpdate(row.price_timestamp)}`
     : "Saved closing snapshot";
   return `
-    <tr class="${row.z_score > 1 ? "signal-row" : ""}">
+    <tr class="${hasZScore && display.zScore > 1 ? "signal-row" : ""}">
       <td><span class="rank-number">${viewRank}</span></td>
       <td class="company-cell">
         <strong>${escapeHtml(row.ticker)}</strong><span class="company-name">${escapeHtml(shortCompanyName(row.company_name))}</span>
@@ -385,7 +459,7 @@ function rowMarkup(row, viewRank) {
       <td><span class="number term-tip sigma-value" tabindex="0" data-tooltip="${escapeHtml(expectedSigmaTooltip(row))}">${formatNumber(row.sigma_1d_pct)}%</span></td>
       <td>
         <div class="z-cell">
-          <span class="z-value ${direction}">${formatNumber(row.z_score, 3)}</span>
+          <span class="z-value ${hasZScore ? direction : ""}">${hasZScore ? formatNumber(display.zScore, 3) : "--"}</span>
           <span class="z-track"><span class="z-bar ${direction}" style="width:${width}%"></span></span>
         </div>
       </td>
@@ -406,8 +480,13 @@ function sortLabel(view = state.view) {
   return `${labels[settings.sortKey]}, ${settings.sortDirection === "desc" ? "high to low" : "low to high"}`;
 }
 
-function latestVisibleTimestamp(rows) {
-  const timestamps = rows.map((row) => Date.parse(row.price_timestamp || "")).filter(Number.isFinite);
+function latestVisibleTimestamp(rows, view) {
+  const timestamps = rows.map((row) => {
+    const display = rowDisplayMetrics(row, view);
+    return Date.parse(display.isPostClose && display.hasPrice
+      ? row.extended_timestamp || ""
+      : display.isPostClose ? "" : row.price_timestamp || "");
+  }).filter(Number.isFinite);
   return timestamps.length ? new Date(Math.max(...timestamps)).toISOString() : null;
 }
 
@@ -451,7 +530,10 @@ function renderTable(view) {
     : window.SigmaMath.paginateRows(matchingRows, 1, Math.max(1, matchingRows.length));
   const rows = pagination.items;
   if (view === "today") settings.page = pagination.page;
-  const observedRows = payload.rows.filter((row) => row.price_source).length;
+  const observedRows = payload.rows.filter((row) => {
+    const display = rowDisplayMetrics(row, view);
+    return display.isPostClose ? display.hasPrice : Boolean(row.price_source);
+  }).length;
 
   table.rows.innerHTML = rows.map((row, index) => rowMarkup(
     row,
@@ -490,14 +572,22 @@ function render() {
   const matchingRows = visibleRows(state.view);
   const top = matchingRows[0];
   const mix = payload.reliability_mix || {};
-  const liveTimestamp = latestVisibleTimestamp(payload.rows);
+  const liveTimestamp = latestVisibleTimestamp(payload.rows, state.view);
   const outsideCount = matchingRows.filter((row) => (
-    state.view === "today" ? Math.abs(row.z_score) > 1 : row.z_score > 1
+    state.view === "today"
+      ? Math.abs(rowDisplayMetrics(row, state.view).zScore) > 1
+      : rowDisplayMetrics(row, state.view).zScore > 1
   )).length;
 
-  elements.topSignal.textContent = top ? `${formatNumber(top.z_score, 3)} z` : "--";
-  elements.topSignal.dataset.direction = top && top.z_score < 0 ? "negative" : "positive";
-  elements.topTicker.textContent = top?.ticker || "No matching movers";
+  const topDisplay = top ? rowDisplayMetrics(top, state.view) : null;
+
+  elements.topSignal.textContent = topDisplay && Number.isFinite(topDisplay.zScore)
+    ? `${formatNumber(topDisplay.zScore, 3)} z`
+    : "--";
+  elements.topSignal.dataset.direction = topDisplay && topDisplay.zScore < 0 ? "negative" : "positive";
+  elements.topTicker.textContent = topDisplay && Number.isFinite(topDisplay.zScore)
+    ? top.ticker
+    : "No matching movers";
   elements.outsideCount.textContent = outsideCount;
   elements.coverageCount.textContent = payload.rows.length;
   elements.reliabilityMix.textContent = `${mix.high || 0} high / ${mix.medium || 0} medium / ${mix.low || 0} low`;

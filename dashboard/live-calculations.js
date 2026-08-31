@@ -66,6 +66,28 @@
     return 0;
   }
 
+  function postCloseDisplayMetrics(view, marketSession, row) {
+    if (view !== "today" || !["afterhours", "overnight"].includes(marketSession)) {
+      return null;
+    }
+    if (row.extended_session !== marketSession) {
+      return { gainPct: null, hasPrice: false, isPostClose: true, zScore: null };
+    }
+    const metrics = calculateLiveMetrics(
+      row.extended_price,
+      row.regular_price,
+      row.sigma_1d_pct,
+    );
+    return metrics
+      ? {
+        gainPct: metrics.gainPct,
+        hasPrice: true,
+        isPostClose: true,
+        zScore: metrics.zScore,
+      }
+      : { gainPct: null, hasPrice: false, isPostClose: true, zScore: null };
+  }
+
   function sessionLabel(session) {
     return ({
       regular: "Regular",
@@ -157,6 +179,7 @@
     isNewerPrice,
     isPriceForTradingDate,
     paginateRows,
+    postCloseDisplayMetrics,
     primaryGainPct,
     sessionLabel,
     sigmaHorizonEnd,
