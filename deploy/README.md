@@ -45,11 +45,14 @@ is accepted only when it matches the latest completed Nasdaq session and current
 screening policy; otherwise the backend performs its bounded historical refresh
 before opening the server.
 
-Successful deployments install `option-sniper-refresh.timer`. It runs at 08:00
-America/New_York every weekday, including across daylight-saving changes. The
-job refreshes the shared cache in a temporary container while the public adapter
-continues serving, and recreates the adapter only when the cache changed. A
-failed Databento refresh leaves the running service and prior cache untouched.
+Successful deployments install `option-sniper-refresh.timer`. It runs at 20:20
+America/New_York every weekday, shortly after the final EQUS.SUMMARY
+publication, with a second trigger at 20:30 as a retry. Both triggers follow
+daylight-saving changes. The job refreshes the shared cache in a temporary
+container while the public adapter continues serving, and recreates the adapter
+only when the cache changed. When the first run succeeds, the retry sees the
+current cache and exits without downloading data. A failed Databento refresh
+leaves the running service and prior cache untouched.
 
 Inspect or manually trigger the refresh with:
 

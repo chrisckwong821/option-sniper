@@ -90,6 +90,18 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.assertNotIn("DATABENTO_", dockerfile)
         self.assertNotIn("DATABENTO_", compose)
 
+    def test_production_refresh_runs_after_final_equity_summary(self):
+        timer = (ROOT / "deploy" / "option-sniper-refresh.timer").read_text()
+
+        self.assertIn(
+            "OnCalendar=Mon..Fri *-*-* 20:20:00 America/New_York",
+            timer,
+        )
+        self.assertIn(
+            "OnCalendar=Mon..Fri *-*-* 20:30:00 America/New_York",
+            timer,
+        )
+
     def test_production_deployment_requires_ci_main_and_trusted_ssh(self):
         workflow = (ROOT / ".github" / "workflows" / "deploy.yml").read_text()
         deploy_script = (ROOT / "deploy" / "ec2-deploy.sh").read_text()
