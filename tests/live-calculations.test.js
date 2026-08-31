@@ -15,6 +15,23 @@ assert.ok(Math.abs(premarket.absolute - (-0.09)) < 1e-10);
 assert.ok(Math.abs(premarket.percent - (-0.03948061063344932)) < 1e-10);
 assert.equal(SigmaMath.calculatePriceChange(0, 227.96), null);
 
+const weekendHorizon = SigmaMath.calculateSigmaHorizon(
+  3.008704734264028,
+  33.18679970994348,
+);
+assert.ok(Math.abs(weekendHorizon.calendarDays - 3) < 1e-12);
+assert.equal(
+  SigmaMath.sigmaHorizonEnd("2026-08-28T16:00:00-04:00", weekendHorizon),
+  "2026-08-31T20:00:00.000Z",
+);
+const weekdayHorizon = SigmaMath.calculateSigmaHorizon(
+  33.18679970994348 / Math.sqrt(365),
+  33.18679970994348,
+);
+assert.ok(Math.abs(weekdayHorizon.calendarDays - 1) < 1e-12);
+assert.equal(SigmaMath.calculateSigmaHorizon(0, 33), null);
+assert.equal(SigmaMath.sigmaHorizonEnd("invalid", weekendHorizon), null);
+
 const premarketRow = {
   gain_pct: -0.8,
   prior_session_gain_pct: 3.25,

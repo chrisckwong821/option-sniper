@@ -95,6 +95,14 @@ h1 {
   font-size: 12px;
 }
 
+.table-heading .sigma-horizon-note {
+  display: inline-block;
+  color: #a6b7bd;
+  cursor: help;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .session-meta {
   gap: 18px;
   white-space: nowrap;
@@ -541,6 +549,11 @@ th:last-child .term-tip:focus-visible::before {
 
 .label-tip {
   cursor: help;
+}
+
+.sigma-value {
+  cursor: help;
+  white-space: nowrap;
 }
 
 .rank-number,

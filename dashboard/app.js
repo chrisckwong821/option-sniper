@@ -39,6 +39,7 @@ const elements = {
       empty: document.querySelector("#empty-state-yesterday"),
       resultCount: document.querySelector("#result-count-yesterday"),
       methodLine: document.querySelector("#method-line-yesterday"),
+      horizonLine: document.querySelector("#sigma-horizon-yesterday"),
     },
     today: {
       panel: document.querySelector("#panel-today"),
@@ -46,6 +47,7 @@ const elements = {
       empty: document.querySelector("#empty-state-today"),
       resultCount: document.querySelector("#result-count-today"),
       methodLine: document.querySelector("#method-line-today"),
+      horizonLine: document.querySelector("#sigma-horizon-today"),
     },
   },
   search: document.querySelector("#search-input"),
@@ -137,6 +139,82 @@ function formatPriceTime(value) {
     second: "2-digit",
     timeZone: "America/New_York",
   }).format(new Date(value));
+}
+
+function formatMarketMoment(value) {
+  if (!value) return "--";
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+    timeZone: "America/New_York",
+  }).format(new Date(value));
+}
+
+function formatHorizonDays(value) {
+  const days = Number(value);
+  if (!Number.isFinite(days)) return "unknown horizon";
+  const rounded = Math.round(days * 100) / 100;
+  const digits = Number.isInteger(rounded) ? 0 : 2;
+  return `${formatNumber(rounded, digits)} calendar ${rounded === 1 ? "day" : "days"}`;
+}
+
+function calendarDateDifference(startValue, endValue) {
+  const startDate = String(startValue || "").slice(0, 10);
+  const endDate = String(endValue || "").slice(0, 10);
+  const start = Date.parse(`${startDate}T00:00:00Z`);
+  const end = Date.parse(`${endDate}T00:00:00Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+  return (end - start) / (24 * 60 * 60 * 1000);
+}
+
+function sigmaContext(row) {
+  let annualizedIvPct = Number(row.annualized_implied_vol_pct);
+  let horizon = window.SigmaMath.calculateSigmaHorizon(
+    row.sigma_1d_pct,
+    annualizedIvPct,
+  );
+  if (!horizon) {
+    const calendarDays = calendarDateDifference(
+      row.iv_snapshot_time,
+      row.payload_data_date,
+    );
+    if (calendarDays) {
+      annualizedIvPct = Number(row.sigma_1d_pct) / Math.sqrt(calendarDays / 365);
+      horizon = window.SigmaMath.calculateSigmaHorizon(
+        row.sigma_1d_pct,
+        annualizedIvPct,
+      );
+    }
+  }
+  const end = window.SigmaMath.sigmaHorizonEnd(row.iv_snapshot_time, horizon);
+  return horizon && end ? { horizon, end, annualizedIvPct } : null;
+}
+
+function expectedSigmaTooltip(row) {
+  const context = sigmaContext(row);
+  if (!context) {
+    return "Option-implied expected move for the stored close-to-close horizon.";
+  }
+  const days = Math.round(context.horizon.calendarDays * 100) / 100;
+  return [
+    `Option IV: ${formatNumber(context.annualizedIvPct)}% annualized at ${formatMarketMoment(row.iv_snapshot_time)}.`,
+    `Expected sigma: ${formatNumber(context.annualizedIvPct)}% x sqrt(${formatNumber(days, Number.isInteger(days) ? 0 : 2)}/365) = ${formatNumber(row.sigma_1d_pct)}%.`,
+    `Horizon: ${formatMarketMoment(row.iv_snapshot_time)} to ${formatMarketMoment(context.end)}.`,
+    `Expiry: ${formatDate(row.option_expiry)}. IV Reliability: ${row.iv_reliability}.`,
+  ].join(" ");
+}
+
+function expectedSigmaNote(payload) {
+  const row = payload?.rows?.find((candidate) => sigmaContext(candidate));
+  const context = row ? sigmaContext(row) : null;
+  if (!row || !context) {
+    return `IV as of ${formatUpdate(payload?.iv_snapshot_time)}`;
+  }
+  return `IV as of ${formatMarketMoment(row.iv_snapshot_time)} · Expected-move horizon to ${formatMarketMoment(context.end)} (${formatHorizonDays(context.horizon.calendarDays)})`;
 }
 
 function populateSectors(rows) {
@@ -304,7 +382,7 @@ function rowMarkup(row, viewRank) {
         ${priceStackMarkup(row)}
       </td>
       <td>${gainStackMarkup(row)}</td>
-      <td><span class="number">${formatNumber(row.sigma_1d_pct)}%</span></td>
+      <td><span class="number term-tip sigma-value" tabindex="0" data-tooltip="${escapeHtml(expectedSigmaTooltip(row))}">${formatNumber(row.sigma_1d_pct)}%</span></td>
       <td>
         <div class="z-cell">
           <span class="z-value ${direction}">${formatNumber(row.z_score, 3)}</span>
@@ -322,7 +400,7 @@ function sortLabel(view = state.view) {
     abs_z_score: "absolute Z-score",
     z_score: "Z-score",
     gain_pct: "gain",
-    sigma_1d_pct: "one-day sigma",
+    sigma_1d_pct: "expected sigma",
     market_cap_usd: "market cap",
   };
   return `${labels[settings.sortKey]}, ${settings.sortDirection === "desc" ? "high to low" : "low to high"}`;
@@ -390,6 +468,7 @@ function renderTable(view) {
       ? `${observedRows} of ${payload.rows.length} current-session prices · ranked by ${sortLabel(view)}`
       : `No current-session prices yet · showing ${formatDate(payload.data_date)} closing snapshot · ranked by ${sortLabel(view)}`
     : `Fixed 20-name list · ranked by ${sortLabel(view)}`;
+  table.horizonLine.textContent = expectedSigmaNote(payload);
   if (view === "today") {
     elements.todayPagination.hidden = pagination.totalPages <= 1;
     elements.todayPageLabel.textContent = `Page ${pagination.page} of ${pagination.totalPages}`;
@@ -427,7 +506,7 @@ function render() {
   elements.anchorNote.textContent = state.view === "today"
     ? `Today's return anchor: ${formatDate(payload.anchor_date)} close`
     : `Saved screen anchor: ${formatDate(payload.anchor_date)} close`;
-  elements.ivNote.textContent = `IV snapshot: ${formatUpdate(payload.iv_snapshot_time)} / expiry ${payload.option_expiry}`;
+  elements.ivNote.textContent = `${expectedSigmaNote(payload)} · Expiry ${formatDate(payload.option_expiry)}`;
   elements.absoluteRank.hidden = state.view !== "today";
   elements.savedRank.hidden = state.view !== "yesterday";
 
@@ -698,6 +777,9 @@ function initializeRows(payload, view) {
   payload.rows.forEach((row) => {
       row.dashboard_view = view;
       row.payload_anchor_date = payload.anchor_date;
+      row.payload_data_date = payload.data_date;
+      row.iv_snapshot_time = row.iv_snapshot_time || payload.iv_snapshot_time;
+      row.option_expiry = row.option_expiry || payload.option_expiry;
       row.snapshot_last_price = row.last_price;
       row.snapshot_gain_pct = row.gain_pct;
       row.saved_gain_pct = row.gain_pct;

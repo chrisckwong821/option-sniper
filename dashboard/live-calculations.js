@@ -5,10 +5,10 @@
 })(typeof window !== "undefined" ? window : globalThis, function createSigmaMath() {
   "use strict";
 
-  function calculateLiveMetrics(price, anchorPrice, sigmaOneDayPct) {
+  function calculateLiveMetrics(price, anchorPrice, sigmaExpectedPct) {
     const current = Number(price);
     const anchor = Number(anchorPrice);
-    const sigma = Number(sigmaOneDayPct) / 100;
+    const sigma = Number(sigmaExpectedPct) / 100;
     if (!(current > 0) || !(anchor > 0) || !(sigma > 0)) return null;
 
     const logReturn = Math.log(current / anchor);
@@ -27,6 +27,26 @@
       absolute: current - reference,
       percent: ((current / reference) - 1) * 100,
     };
+  }
+
+  function calculateSigmaHorizon(sigmaPct, annualizedIvPct) {
+    const sigma = Number(sigmaPct);
+    const annualizedIv = Number(annualizedIvPct);
+    if (!(sigma > 0) || !(annualizedIv > 0)) return null;
+
+    const yearFraction = (sigma / annualizedIv) ** 2;
+    return {
+      yearFraction,
+      calendarDays: yearFraction * 365,
+      milliseconds: yearFraction * 365 * 24 * 60 * 60 * 1000,
+    };
+  }
+
+  function sigmaHorizonEnd(snapshotTime, horizon) {
+    const start = Date.parse(snapshotTime || "");
+    const milliseconds = Number(horizon?.milliseconds);
+    if (!Number.isFinite(start) || !(milliseconds > 0)) return null;
+    return new Date(start + milliseconds).toISOString();
   }
 
   function primaryGainPct(view, row) {
@@ -132,12 +152,14 @@
   return Object.freeze({
     calculateLiveMetrics,
     calculatePriceChange,
+    calculateSigmaHorizon,
     isCurrentAnchor,
     isNewerPrice,
     isPriceForTradingDate,
     paginateRows,
     primaryGainPct,
     sessionLabel,
+    sigmaHorizonEnd,
     streamSequenceDecision,
   });
 });

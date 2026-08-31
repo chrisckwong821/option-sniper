@@ -2,8 +2,8 @@
 
 Option Sniper is a dark, live sigma-adjusted mover monitor. It ranks a saved
 list of the latest completed Nasdaq session's gainers and a broader
-current-session universe using option-implied one-day sigma and live Databento
-prices.
+current-session universe using option-implied close-to-close expected sigma and
+live Databento prices.
 
 The project is standalone, and generated market snapshots are never committed.
 Legacy `sigma-tape` runtime paths and environment-variable names are retained so
@@ -34,6 +34,13 @@ prices. Live equity prices remain on `EQUS.MINI`. Both route through
 not historical volatility. Option Sniper infers the forward from paired call-put
 mids and applies discounted Black-76 with a hard-coded 4% continuously
 compounded annual risk-free rate.
+
+Expected sigma scales annualized IV by the actual elapsed close-to-close time
+using `IV * sqrt(elapsed calendar time / 365)`. A Friday-to-Monday trading
+session therefore uses three calendar days, while an ordinary weekday session
+uses one. The legacy cache field remains `sigma_1d_pct` for compatibility, but
+the dashboard labels the measure `Expected sigma` and exposes the exact horizon
+and formula in its metadata and tooltips.
 
 ## Local development
 

@@ -48,7 +48,11 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(state["today"]["rows"]), 30)
         self.assertEqual(state_response.headers["Cache-Control"], "no-store")
 
-        self.assertEqual((await self.client.get("/")).status, 200)
+        root_response = await self.client.get("/")
+        self.assertEqual(root_response.status, 200)
+        root_html = await root_response.text()
+        self.assertIn("Expected &sigma;", root_html)
+        self.assertNotIn(">1-day &sigma;<", root_html)
         self.assertEqual((await self.client.get("/app.js")).status, 200)
         self.assertEqual(
             (await self.client.get("/data/snapshot-state.json")).status,

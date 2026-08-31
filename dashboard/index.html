@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Option Sniper</title>
-    <link rel="stylesheet" href="styles.css?v=20260830-pagination">
+    <link rel="stylesheet" href="styles.css?v=20260831-expected-sigma">
   </head>
   <body>
     <header class="app-header">
@@ -92,6 +92,7 @@
           <div>
             <h2>Yesterday's top 20 gainers</h2>
             <p id="method-line-yesterday">Fixed 20-name list · ranked by saved rank</p>
+            <p id="sigma-horizon-yesterday" class="sigma-horizon-note term-tip" tabindex="0" data-tooltip="Expected sigma equals annualized option IV multiplied by sqrt(elapsed calendar time / 365). Weekends and market holidays therefore use a longer horizon.">IV and expected-move horizon --</p>
           </div>
           <span id="result-count-yesterday">0 shown</span>
         </div>
@@ -105,8 +106,8 @@
                 <th class="numeric"><button class="sort-button" data-sort="market_cap_usd" type="button">Market cap</button></th>
                 <th class="numeric"><span class="term-tip label-tip" tabindex="0" data-tooltip="Regular-session close on top. When available, the lower line shows the latest pre-market, after-hours, or overnight price and its change versus that close.">Last</span></th>
                 <th class="numeric"><button class="sort-button term-tip" data-sort="gain_pct" data-tooltip="Regular-close gain stays on top. When available, the lower value is the pre-market, after-hours, or overnight move versus that close." type="button">Gain</button></th>
-                <th class="numeric"><button class="sort-button term-tip" data-sort="sigma_1d_pct" data-tooltip="The one-day expected move from prior-close option IV: annual IV multiplied by sqrt(1/365)." type="button">1-day &sigma;</button></th>
-                <th><button class="sort-button term-tip active" data-sort="z_score" data-tooltip="Log return from the displayed return anchor divided by option-implied one-day sigma. Above 1 means the gain exceeded one expected standard deviation." type="button">Z-score</button></th>
+                <th class="numeric"><button class="sort-button term-tip" data-sort="sigma_1d_pct" data-tooltip="Option-implied expected move for the stored close-to-close horizon. Annualized IV is scaled by sqrt(actual elapsed calendar time / 365), so weekends and market holidays use a longer horizon." type="button">Expected &sigma;</button></th>
+                <th><button class="sort-button term-tip active" data-sort="z_score" data-tooltip="Log return from the saved return anchor divided by Expected sigma for the full close-to-close horizon. Above 1 means the move exceeded one expected standard deviation." type="button">Z-score</button></th>
                 <th><span class="term-tip label-tip" tabindex="0" data-tooltip="Confidence in the IV denominator. High uses several tight two-sided strikes; medium has more spread sensitivity; low is provisional.">IV Reliability</span></th>
               </tr>
             </thead>
@@ -121,6 +122,7 @@
           <div>
             <h2>Today's live IV movers</h2>
             <p id="method-line-today">Eligible IV universe · waiting for current-session prices</p>
+            <p id="sigma-horizon-today" class="sigma-horizon-note term-tip" tabindex="0" data-tooltip="Expected sigma equals annualized option IV multiplied by sqrt(elapsed calendar time / 365). Weekends and market holidays therefore use a longer horizon.">IV and expected-move horizon --</p>
           </div>
           <span id="result-count-today">0 shown</span>
         </div>
@@ -134,8 +136,8 @@
                 <th class="numeric"><button class="sort-button" data-sort="market_cap_usd" type="button">Market cap</button></th>
                 <th class="numeric"><span class="term-tip label-tip" tabindex="0" data-tooltip="Prior regular-session close on top. Before the open, the lower line shows the newest valid overnight or pre-market price used for today's Z-score.">Last</span></th>
                 <th class="numeric"><button class="sort-button term-tip" data-sort="gain_pct" data-tooltip="The latest completed session's close-to-close move. Once the next session trades, this updates versus that completed close; pre-market and overnight moves appear separately." type="button">Gain</button></th>
-                <th class="numeric"><button class="sort-button term-tip" data-sort="sigma_1d_pct" data-tooltip="The one-day expected move from prior-close option IV: annual IV multiplied by sqrt(1/365)." type="button">1-day &sigma;</button></th>
-                <th><button class="sort-button term-tip active" data-sort="z_score" data-tooltip="Today's log return from the prior regular close divided by option-implied one-day sigma. Before the open, the return uses the newest valid overnight or pre-market price." type="button">Z-score</button></th>
+                <th class="numeric"><button class="sort-button term-tip" data-sort="sigma_1d_pct" data-tooltip="Option-implied expected move from the latest regular close to the target close. Annualized IV is scaled by sqrt(actual elapsed calendar time / 365), so weekends and market holidays use a longer horizon." type="button">Expected &sigma;</button></th>
+                <th><button class="sort-button term-tip active" data-sort="z_score" data-tooltip="Live log return since the latest regular close divided by Expected sigma for the full next-close horizon. Premarket and intraday returns are partial moves compared with that full-horizon expectation." type="button">Z-score</button></th>
                 <th><span class="term-tip label-tip" tabindex="0" data-tooltip="Confidence in the IV denominator. High uses several tight two-sided strikes; medium has more spread sensitivity; low is provisional.">IV Reliability</span></th>
               </tr>
             </thead>
@@ -160,7 +162,7 @@
       <span id="iv-note">IV snapshot --</span>
     </footer>
     <div id="live-announcer" class="visually-hidden" aria-live="polite"></div>
-    <script src="live-calculations.js?v=20260830-delta-v1"></script>
-    <script src="app.js?v=20260830-delta-v1"></script>
+    <script src="live-calculations.js?v=20260831-expected-sigma"></script>
+    <script src="app.js?v=20260831-expected-sigma"></script>
   </body>
 </html>
