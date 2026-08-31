@@ -59,7 +59,7 @@ STALE_AFTER_SECONDS = {
     "closed": 900,
 }
 TASKS_KEY = web.AppKey("tasks", list)
-STREAM_SCHEMA_VERSION = "1.1"
+STREAM_SCHEMA_VERSION = "1.2"
 DEFAULT_BROADCAST_INTERVAL = 1.0
 DEFAULT_STATUS_INTERVAL = 15.0
 DEFAULT_SEND_TIMEOUT = 2.0
@@ -104,6 +104,11 @@ def timestamp_from_ns(value: int) -> datetime:
     return datetime.fromtimestamp(value / 1_000_000_000, UTC)
 
 
+def regular_close_replay_start(value: datetime) -> datetime:
+    eastern = ensure_aware(value).astimezone(EASTERN)
+    return eastern.replace(hour=15, minute=30, second=0, microsecond=0).astimezone(UTC)
+
+
 @dataclass(frozen=True)
 class FeedConfig:
     dataset: str
@@ -125,6 +130,7 @@ class PriceStore:
         self.status_interval = status_interval
         self.send_timeout = send_timeout
         self.prices: dict[str, dict[str, Any]] = {}
+        self.regular_prices: dict[str, dict[str, Any]] = {}
         self.feed_status: dict[str, dict[str, Any]] = {}
         self.clients: set[web.WebSocketResponse] = set()
         self.dirty_symbols: set[str] = set()
@@ -149,6 +155,13 @@ class PriceStore:
     def invalidate_snapshot(self) -> None:
         self.snapshot_generation += 1
         self.snapshot_cache = None
+
+    def symbols_missing_regular_close(self, trading_date: str) -> list[str]:
+        return sorted(
+            ticker
+            for ticker in self.symbols
+            if self.regular_prices.get(ticker, {}).get("trading_date") != trading_date
+        )
 
     def set_feed_status(self, dataset: str, state: str, detail: str = "") -> None:
         previous = self.feed_status.get(dataset, {})
@@ -192,11 +205,7 @@ class PriceStore:
         if session == "closed" or session not in SESSION_LABELS:
             return False
 
-        previous = self.prices.get(ticker)
-        if previous and event_time <= datetime.fromisoformat(previous["ts_event"]):
-            return False
-
-        self.prices[ticker] = {
+        point = {
             "ticker": ticker,
             "price": price,
             "ts_event": event_time.isoformat(),
@@ -207,6 +216,24 @@ class PriceStore:
             "is_extended_hours": session != "regular",
             "volume": volume,
         }
+        regular_updated = False
+        if session == "regular":
+            previous_regular = self.regular_prices.get(ticker)
+            if not previous_regular or event_time > datetime.fromisoformat(
+                previous_regular["ts_event"]
+            ):
+                self.regular_prices[ticker] = point
+                regular_updated = True
+
+        previous = self.prices.get(ticker)
+        latest_updated = not previous or event_time > datetime.fromisoformat(
+            previous["ts_event"]
+        )
+        if latest_updated:
+            self.prices[ticker] = point
+        if not latest_updated and not regular_updated:
+            return False
+
         self.touch_feed(dataset)
         self.dirty_symbols.add(ticker)
         self.cache_dirty = True
@@ -217,8 +244,18 @@ class PriceStore:
         event_time = datetime.fromisoformat(point["ts_event"])
         age_seconds = max(0.0, (now - event_time).total_seconds())
         stale_after = STALE_AFTER_SECONDS.get(point["session"], 300)
+        regular = self.regular_prices.get(point["ticker"])
+        regular_close = None
+        if regular:
+            regular_close = {
+                "price": regular["price"],
+                "ts_event": regular["ts_event"],
+                "source_dataset": regular["source_dataset"],
+                "trading_date": regular["trading_date"],
+            }
         return {
             **point,
+            "regular_close": regular_close,
             "age_seconds": round(age_seconds, 1),
             "is_stale": age_seconds > stale_after,
         }
@@ -337,9 +374,25 @@ class PriceStore:
                         "session_label", "trading_date", "is_extended_hours", "volume",
                     )
                 }
+            for point in cached.get("regular_prices", []):
+                ticker = point.get("ticker")
+                if ticker not in self.symbols:
+                    continue
+                datetime.fromisoformat(point["ts_event"])
+                self.regular_prices[ticker] = {
+                    key: point.get(key)
+                    for key in (
+                        "ticker", "price", "ts_event", "source_dataset", "session",
+                        "session_label", "trading_date", "is_extended_hours", "volume",
+                    )
+                }
+            for ticker, point in self.prices.items():
+                if point.get("session") == "regular" and ticker not in self.regular_prices:
+                    self.regular_prices[ticker] = point
             self.invalidate_snapshot()
         except (OSError, ValueError, TypeError, KeyError):
             self.prices = {}
+            self.regular_prices = {}
 
     def save_cache(self) -> None:
         if not self.cache_dirty:
@@ -349,6 +402,7 @@ class PriceStore:
         temporary.write_text(json.dumps({
             "saved_at": utc_now().isoformat(),
             "prices": list(self.prices.values()),
+            "regular_prices": list(self.regular_prices.values()),
         }, indent=2) + "\n")
         os.replace(temporary, self.cache_path)
         self.cache_dirty = False
@@ -415,7 +469,8 @@ class DatabentoFeed:
             reconnect_policy="reconnect",
             slow_reader_behavior="skip",
         )
-        replay_start = utc_now() - timedelta(minutes=self.replay_minutes)
+        now = utc_now()
+        replay_start = now - timedelta(minutes=self.replay_minutes)
         client.subscribe(
             dataset=self.config.dataset,
             schema="ohlcv-1s",
@@ -423,6 +478,16 @@ class DatabentoFeed:
             stype_in="raw_symbol",
             start=replay_start,
         )
+        if market_session_at(now) == "afterhours" and "regular" in self.config.phases:
+            missing = self.store.symbols_missing_regular_close(trading_date_at(now))
+            if missing:
+                client.subscribe(
+                    dataset=self.config.dataset,
+                    schema="ohlcv-1m",
+                    symbols=missing,
+                    stype_in="raw_symbol",
+                    start=regular_close_replay_start(now),
+                )
         return client
 
     async def connect_without_blocking_server(self) -> db.Live:
@@ -535,6 +600,25 @@ async def mock_feed(
         session = market_session_at(now)
         if session == "closed":
             session = "afterhours"
+        trading_date = trading_date_at(now)
+        if session == "afterhours":
+            regular_time = now.astimezone(EASTERN).replace(
+                hour=15,
+                minute=59,
+                second=59,
+                microsecond=0,
+            ).astimezone(UTC)
+            missing_regular = set(store.symbols_missing_regular_close(trading_date))
+            for ticker, anchor in anchors.items():
+                if ticker in missing_regular:
+                    store.update_price(
+                        ticker,
+                        anchor * (1 + offsets[ticker]),
+                        regular_time,
+                        "MOCK.LIVE",
+                        session_override="regular",
+                        trading_date_override=trading_date,
+                    )
         for index, (ticker, anchor) in enumerate(anchors.items()):
             wave = math.sin(phase + index * 0.43) * 0.0025
             store.update_price(
@@ -544,7 +628,7 @@ async def mock_feed(
                 "MOCK.LIVE",
                 100 + index,
                 session_override=session,
-                trading_date_override=trading_date_at(now),
+                trading_date_override=trading_date,
             )
         phase += 0.35
         await asyncio.sleep(1)

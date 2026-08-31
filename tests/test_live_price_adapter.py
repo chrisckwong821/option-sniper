@@ -78,6 +78,40 @@ class PriceStoreTests(unittest.TestCase):
         restored = PriceStore(["PANW"], self.store.cache_path)
         restored.load_cache()
         self.assertEqual(restored.prices["PANW"]["price"], 390)
+        self.assertEqual(restored.regular_prices["PANW"]["price"], 390)
+
+    def test_afterhours_price_keeps_regular_close_in_stream_and_cache(self):
+        regular_time = datetime(2026, 8, 28, 19, 59, 59, tzinfo=UTC)
+        afterhours_time = datetime(2026, 8, 28, 20, 30, tzinfo=UTC)
+        self.assertTrue(self.store.update_price(
+            "PANW", 390, regular_time, "EQUS.MINI", 100
+        ))
+        self.assertTrue(self.store.update_price(
+            "PANW", 392, afterhours_time, "EQUS.MINI", 50
+        ))
+
+        point = self.store.payload()["prices"][0]
+        self.assertEqual(point["price"], 392)
+        self.assertEqual(point["session"], "afterhours")
+        self.assertEqual(point["regular_close"]["price"], 390)
+        self.assertEqual(point["regular_close"]["trading_date"], "2026-08-28")
+
+        self.store.save_cache()
+        restored = PriceStore(["PANW"], self.store.cache_path)
+        restored.load_cache()
+        self.assertEqual(restored.prices["PANW"]["price"], 392)
+        self.assertEqual(restored.regular_prices["PANW"]["price"], 390)
+
+    def test_replayed_regular_close_can_be_older_than_latest_afterhours_price(self):
+        afterhours_time = datetime(2026, 8, 28, 20, 30, tzinfo=UTC)
+        regular_time = datetime(2026, 8, 28, 19, 59, 59, tzinfo=UTC)
+        self.store.update_price("PANW", 392, afterhours_time, "EQUS.MINI", 50)
+
+        self.assertTrue(self.store.update_price(
+            "PANW", 390, regular_time, "EQUS.MINI", 100
+        ))
+        self.assertEqual(self.store.prices["PANW"]["price"], 392)
+        self.assertEqual(self.store.regular_prices["PANW"]["price"], 390)
 
     def test_snapshot_sequence_is_stable_until_delta_advances_it(self):
         event_time = datetime(2026, 8, 28, 13, 30, tzinfo=UTC)
@@ -86,7 +120,7 @@ class PriceStoreTests(unittest.TestCase):
         second = self.store.payload()
         delta = self.store.message("delta", ["PANW"], advance_sequence=True)
 
-        self.assertEqual(first["schema_version"], "1.1")
+        self.assertEqual(first["schema_version"], "1.2")
         self.assertEqual(first["sequence"], second["sequence"])
         self.assertEqual(delta["sequence"], first["sequence"] + 1)
         self.assertEqual([point["ticker"] for point in delta["prices"]], ["PANW"])

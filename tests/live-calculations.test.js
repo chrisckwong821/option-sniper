@@ -74,6 +74,18 @@ assert.equal(
   SigmaMath.isCurrentAnchor("yesterday", "2026-08-26", "2026-08-27"),
   true,
 );
+assert.equal(
+  SigmaMath.isAfterHoursCloseCarry(
+    "today", "2026-08-27", "2026-08-28", "afterhours", "2026-08-28",
+  ),
+  true,
+);
+assert.equal(
+  SigmaMath.isAfterHoursCloseCarry(
+    "today", "2026-08-27", "2026-08-28", "premarket", "2026-08-28",
+  ),
+  false,
+);
 
 const fridayPremarket = SigmaMath.calculateLiveMetrics(104, 100, 2);
 assert.ok(Math.abs(fridayPremarket.zScore - (Math.log(1.04) / 0.02)) < 1e-12);

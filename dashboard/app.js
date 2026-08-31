@@ -294,7 +294,10 @@ function extendedPriceState(row) {
 function priceStackMarkup(row, includeExtendedChange = false) {
   const priceState = extendedPriceState(row);
   const regularTime = formatPriceTime(row.regular_timestamp);
-  const regularLabel = `${row.regular_is_live ? "Regular" : "Prior close"}${regularTime ? ` · ${regularTime}` : ""}`;
+  const liveRegularLabel = state.live.marketSession === "afterhours"
+    ? "Last close"
+    : "Regular";
+  const regularLabel = `${row.regular_is_live ? liveRegularLabel : "Prior close"}${regularTime ? ` · ${regularTime}` : ""}`;
 
   let extendedMarkup = "";
   if (priceState.hasExtendedPrice) {
@@ -573,11 +576,23 @@ function applyLivePrice(point, tradingDate) {
 }
 
 function applyLivePriceToRow(row, point) {
+  const regularClose = point.regular_close;
+  const carriesCompletedClose = window.SigmaMath.isAfterHoursCloseCarry(
+    row.dashboard_view,
+    row.payload_anchor_date,
+    state.cache?.target_completed_session,
+    state.live.marketSession,
+    regularClose?.trading_date,
+  );
+  const usesAfterHoursClose = row.dashboard_view === "today"
+    && state.live.marketSession === "afterhours"
+    && Number(regularClose?.price) > 0
+    && regularClose?.trading_date === point.trading_date;
   if (!window.SigmaMath.isCurrentAnchor(
     row.dashboard_view,
     row.payload_anchor_date,
     state.cache?.target_completed_session,
-  )) return false;
+  ) && !carriesCompletedClose) return false;
   if (point.ts_event === row.price_timestamp) {
     row.price_stale = Boolean(point.is_stale);
     if (point.session === row.extended_session) {
@@ -587,10 +602,11 @@ function applyLivePriceToRow(row, point) {
   }
   if (!window.SigmaMath.isNewerPrice(point.ts_event, row.price_timestamp)) return false;
   const anchor = row.live_anchor_price || row.anchor_price || row.snapshot_last_price || row.last_price;
-  const metrics = window.SigmaMath.calculateLiveMetrics(point.price, anchor, row.sigma_1d_pct);
+  const metricPrice = usesAfterHoursClose ? regularClose.price : point.price;
+  const metrics = window.SigmaMath.calculateLiveMetrics(metricPrice, anchor, row.sigma_1d_pct);
   if (!metrics) return false;
 
-  row.last_price = Number(point.price);
+  row.last_price = Number(metricPrice);
   row.gain_pct = metrics.gainPct;
   row.log_return_pct = metrics.logReturnPct;
   row.z_score = metrics.zScore;
@@ -600,19 +616,24 @@ function applyLivePriceToRow(row, point) {
   row.price_session = point.session;
   row.price_trading_date = point.trading_date;
   row.price_stale = Boolean(point.is_stale);
-  if (point.session === "regular") {
-    row.regular_price = Number(point.price);
-    row.regular_timestamp = point.ts_event;
-    row.regular_source = point.source_dataset;
+  if (point.session === "regular" || usesAfterHoursClose) {
+    row.regular_price = Number(usesAfterHoursClose ? regularClose.price : point.price);
+    row.regular_timestamp = usesAfterHoursClose ? regularClose.ts_event : point.ts_event;
+    row.regular_source = usesAfterHoursClose
+      ? regularClose.source_dataset
+      : point.source_dataset;
     row.regular_is_live = true;
     row.regular_gain_pct = row.dashboard_view === "yesterday"
       ? row.saved_gain_pct
       : metrics.gainPct;
-    row.extended_price = null;
-    row.extended_timestamp = null;
-    row.extended_session = null;
-    row.extended_stale = false;
-  } else if (["premarket", "afterhours", "overnight"].includes(point.session)) {
+    if (point.session === "regular") {
+      row.extended_price = null;
+      row.extended_timestamp = null;
+      row.extended_session = null;
+      row.extended_stale = false;
+    }
+  }
+  if (["premarket", "afterhours", "overnight"].includes(point.session)) {
     row.extended_price = Number(point.price);
     row.extended_timestamp = point.ts_event;
     row.extended_session = point.session;

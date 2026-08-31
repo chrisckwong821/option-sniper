@@ -1,6 +1,7 @@
 import asyncio
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -52,6 +53,37 @@ class DatabentoKeyRoutingIntegrationTests(unittest.TestCase):
             self.assertEqual(
                 [call.args[0] for call in historical_client.call_args_list],
                 ["live-test-key", "options-test-key"],
+            )
+
+    def test_afterhours_connection_recovers_missing_regular_closes_with_minute_bars(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            store = PriceStore(["AAPL"], Path(tempdir) / "prices.json")
+            feed = DatabentoFeed(
+                api_key="live-test-key",
+                config=FeedConfig(
+                    "EQUS.MINI",
+                    frozenset({"premarket", "regular", "afterhours"}),
+                ),
+                symbols=["AAPL"],
+                store=store,
+                replay_minutes=60,
+                stop=asyncio.Event(),
+            )
+            afterhours = datetime(2026, 8, 28, 22, 0, tzinfo=UTC)
+            with (
+                patch("scripts.live_price_adapter.utc_now", return_value=afterhours),
+                patch("scripts.live_price_adapter.db.Live") as live_client,
+            ):
+                feed.connect()
+
+            subscriptions = live_client.return_value.subscribe.call_args_list
+            self.assertEqual(len(subscriptions), 2)
+            self.assertEqual(subscriptions[0].kwargs["schema"], "ohlcv-1s")
+            self.assertEqual(subscriptions[1].kwargs["schema"], "ohlcv-1m")
+            self.assertEqual(subscriptions[1].kwargs["symbols"], ["AAPL"])
+            self.assertEqual(
+                subscriptions[1].kwargs["start"],
+                datetime(2026, 8, 28, 19, 30, tzinfo=UTC),
             )
 
 

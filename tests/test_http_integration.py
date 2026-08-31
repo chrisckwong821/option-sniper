@@ -67,7 +67,7 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         message = await socket.receive(timeout=2)
         self.assertEqual(message.type, WSMsgType.TEXT)
         self.assertEqual(message.json()["type"], "snapshot")
-        self.assertEqual(message.json()["schema_version"], "1.1")
+        self.assertEqual(message.json()["schema_version"], "1.2")
         await socket.close()
 
     async def test_dirty_symbol_delta_is_shared_across_clients(self):

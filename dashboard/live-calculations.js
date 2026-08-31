@@ -98,6 +98,20 @@
       || payloadAnchorDate === targetCompletedSession;
   }
 
+  function isAfterHoursCloseCarry(
+    view,
+    payloadAnchorDate,
+    targetCompletedSession,
+    marketSession,
+    regularTradingDate,
+  ) {
+    return view === "today"
+      && marketSession === "afterhours"
+      && Boolean(targetCompletedSession)
+      && payloadAnchorDate !== targetCompletedSession
+      && regularTradingDate === targetCompletedSession;
+  }
+
   function streamSequenceDecision(lastSequence, messageType, incomingSequence) {
     const parsedCurrent = Number(lastSequence);
     const current = lastSequence !== null
@@ -153,6 +167,7 @@
     calculateLiveMetrics,
     calculatePriceChange,
     calculateSigmaHorizon,
+    isAfterHoursCloseCarry,
     isCurrentAnchor,
     isNewerPrice,
     isPriceForTradingDate,
