@@ -40,10 +40,10 @@ It must define `DATABENTO_LIVE_API_KEY` and `DATABENTO_OPTIONS_API_KEY`.
 Do not add either value to an image, release archive, or GitHub Actions log.
 
 The container uses `restart: unless-stopped`, so Docker restores it after a host
-reboot. The image contains no credentials or market snapshots. A mounted cache
-is accepted only when it matches the latest completed Nasdaq session and current
-screening policy; otherwise the backend performs its bounded historical refresh
-before opening the server.
+reboot. The image contains no credentials or market snapshots. Production starts
+in cache-only mode so deployments and host restarts do not wait for Databento;
+the scheduled refresh service validates and atomically replaces the mounted
+cache.
 
 Successful deployments install `option-sniper-refresh.timer`. It runs at 04:05
 America/New_York Tuesday through Saturday, with a second trigger at 05:00 as a

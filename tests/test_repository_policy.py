@@ -83,6 +83,7 @@ class RepositoryPolicyTests(unittest.TestCase):
         compose = (ROOT / "deploy" / "compose.yml").read_text()
 
         self.assertIn("USER 10001:10001", dockerfile)
+        self.assertIn('"--refresh-mode", "never"', dockerfile)
         self.assertIn('"127.0.0.1:8765:8765"', compose)
         self.assertIn("read_only: true", compose)
         self.assertIn("no-new-privileges:true", compose)

@@ -81,12 +81,16 @@ export DATABENTO_OPTIONS_API_KEY='...'
 python -m scripts.live_price_adapter --disable-overnight
 ```
 
-At startup, `auto` mode accepts `.cache/sigma-tape/dashboard-state.json` only
+In local `auto` mode, startup accepts `.cache/sigma-tape/dashboard-state.json` only
 when its anchor matches the latest completed Nasdaq session and its policy
 fingerprint matches the current eligibility rules. Otherwise it fetches the
 Nasdaq listing universe and runs one bounded Databento refresh. If that refresh
 fails, an older valid cache is served with a visible stale warning; without any
 valid cache, startup fails clearly.
+
+The production container starts in `never` mode so a deployment cannot block on
+historical-data availability. Its mounted cache remains visible until the
+dedicated pre-market refresh job atomically replaces it.
 
 Production also runs `option-sniper-refresh.timer` at 04:05 America/New_York on
 Tuesday through Saturday, with a no-op retry at 05:00. The completed session's
