@@ -92,6 +92,21 @@ assert.equal(SigmaMath.isPostCloseSession("premarket"), false);
 assert.equal(SigmaMath.displaysCompletedSession("overnight", false), true);
 assert.equal(SigmaMath.displaysCompletedSession("premarket", true), true);
 assert.equal(SigmaMath.displaysCompletedSession("premarket", false), false);
+assert.equal(SigmaMath.premarketTradePriority({
+  extended_price: 101.25,
+  extended_session: "premarket",
+  extended_trading_date: "2026-09-01",
+}, "premarket", "2026-09-01"), 1);
+assert.equal(SigmaMath.premarketTradePriority({
+  extended_price: 101.25,
+  extended_session: "premarket",
+  extended_trading_date: "2026-08-31",
+}, "premarket", "2026-09-01"), 0);
+assert.equal(SigmaMath.premarketTradePriority({
+  extended_price: 101.25,
+  extended_session: "premarket",
+  extended_trading_date: "2026-09-01",
+}, "regular", "2026-09-01"), 0);
 assert.equal(
   SigmaMath.isCompletedSessionCarry(
     "today", "2026-08-28", "2026-08-31", "overnight", "2026-08-31",

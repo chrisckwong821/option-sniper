@@ -106,6 +106,13 @@
     return isPostCloseSession(marketSession) || Boolean(holdingCompletedClose);
   }
 
+  function premarketTradePriority(row, marketSession, tradingDate) {
+    if (marketSession !== "premarket") return 0;
+    if (row?.extended_session !== "premarket" || Number(row?.extended_price) <= 0) return 0;
+    if (tradingDate && row?.extended_trading_date !== tradingDate) return 0;
+    return 1;
+  }
+
   function isCompletedSessionCarry(
     view,
     payloadAnchorDate,
@@ -182,6 +189,7 @@
     isPostCloseSession,
     isPriceForTradingDate,
     paginateRows,
+    premarketTradePriority,
     primaryGainPct,
     sessionLabel,
     sigmaHorizonEnd,

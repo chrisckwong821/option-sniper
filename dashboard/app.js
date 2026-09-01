@@ -260,6 +260,18 @@ function visibleRows(view = state.view) {
       return true;
     })
     .sort((a, b) => {
+      if (view === "today") {
+        const premarketPriority = window.SigmaMath.premarketTradePriority(
+          b,
+          state.live.marketSession,
+          state.live.dataDate,
+        ) - window.SigmaMath.premarketTradePriority(
+          a,
+          state.live.marketSession,
+          state.live.dataDate,
+        );
+        if (premarketPriority) return premarketPriority;
+      }
       const sortValue = (row) => {
         if (settings.sortKey === "gain_pct") {
           return displayGainPct(row, view);
@@ -462,6 +474,13 @@ function renderTable(view) {
   const rows = pagination.items;
   if (view === "today") settings.page = pagination.page;
   const observedRows = payload.rows.filter((row) => row.price_source).length;
+  const premarketTradeCount = view === "today"
+    ? payload.rows.filter((row) => window.SigmaMath.premarketTradePriority(
+      row,
+      state.live.marketSession,
+      state.live.dataDate,
+    )).length
+    : 0;
 
   table.rows.innerHTML = rows.map((row, index) => rowMarkup(
     row,
@@ -474,7 +493,9 @@ function renderTable(view) {
     ? `${pagination.start}-${pagination.end} of ${pagination.total}`
     : `${matchingRows.length} of ${payload.rows.length}`;
   table.methodLine.textContent = view === "today"
-    ? observedRows > 0
+    ? premarketTradeCount > 0
+      ? `${premarketTradeCount} pre-market trades first · ranked within each group by ${sortLabel(view)}`
+      : observedRows > 0
       ? `${observedRows} of ${payload.rows.length} current-session prices · ranked by ${sortLabel(view)}`
       : `No current-session prices yet · showing ${formatDate(payload.data_date)} closing snapshot · ranked by ${sortLabel(view)}`
     : `Fixed 20-name list · ranked by ${sortLabel(view)}`;
@@ -676,7 +697,11 @@ function handlePriceMessage(message) {
   }
   state.live.sequence = decision.sequence;
   state.live.lastMessageAt = Date.now();
+  const previousMarketSession = state.live.marketSession;
   state.live.marketSession = message.market_session || state.live.marketSession;
+  if (previousMarketSession !== "premarket" && state.live.marketSession === "premarket") {
+    state.viewSettings.today.page = 1;
+  }
   state.live.dataDate = message.trading_date || state.live.dataDate;
   const changed = message.prices.reduce(
     (count, point) => count + Number(applyLivePrice(point, message.trading_date)),
