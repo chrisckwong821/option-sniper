@@ -75,16 +75,31 @@ assert.equal(
   true,
 );
 assert.equal(
-  SigmaMath.isAfterHoursCloseCarry(
+  SigmaMath.isCompletedSessionCarry(
     "today", "2026-08-27", "2026-08-28", "afterhours", "2026-08-28",
   ),
   true,
 );
 assert.equal(
-  SigmaMath.isAfterHoursCloseCarry(
-    "today", "2026-08-27", "2026-08-28", "premarket", "2026-08-28",
+  SigmaMath.isCompletedSessionCarry(
+    "today", "2026-08-28", "2026-08-28", "premarket", "2026-08-28",
   ),
   false,
+);
+assert.equal(SigmaMath.isPostCloseSession("overnight"), true);
+assert.equal(SigmaMath.isPostCloseSession("closed"), true);
+assert.equal(SigmaMath.isPostCloseSession("premarket"), false);
+assert.equal(
+  SigmaMath.isCompletedSessionCarry(
+    "today", "2026-08-28", "2026-08-31", "overnight", "2026-08-31",
+  ),
+  true,
+);
+assert.equal(
+  SigmaMath.isCompletedSessionCarry(
+    "today", "2026-08-28", "2026-08-31", "premarket", "2026-08-31",
+  ),
+  true,
 );
 
 const fridayPremarket = SigmaMath.calculateLiveMetrics(104, 100, 2);

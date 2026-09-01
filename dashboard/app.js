@@ -294,7 +294,8 @@ function extendedPriceState(row) {
 function priceStackMarkup(row, includeExtendedChange = false) {
   const priceState = extendedPriceState(row);
   const regularTime = formatPriceTime(row.regular_timestamp);
-  const liveRegularLabel = state.live.marketSession === "afterhours"
+  const liveRegularLabel = window.SigmaMath.isPostCloseSession(state.live.marketSession)
+    || row.holding_completed_close
     ? "Last close"
     : "Regular";
   const regularLabel = `${row.regular_is_live ? liveRegularLabel : "Prior close"}${regularTime ? ` · ${regularTime}` : ""}`;
@@ -566,7 +567,11 @@ function setView(view) {
 }
 
 function applyLivePrice(point, tradingDate) {
-  if (!window.SigmaMath.isPriceForTradingDate(point.trading_date, tradingDate)) return false;
+  const canCarryCompletedClose = window.SigmaMath.isPostCloseSession(
+    state.live.marketSession,
+  ) && Number(point.regular_close?.price) > 0;
+  if (!window.SigmaMath.isPriceForTradingDate(point.trading_date, tradingDate)
+    && !canCarryCompletedClose) return false;
   const trackedRows = state.rowsByTicker.get(point.ticker) || [];
   if (!trackedRows.length) return false;
   return trackedRows.reduce(
@@ -577,17 +582,22 @@ function applyLivePrice(point, tradingDate) {
 
 function applyLivePriceToRow(row, point) {
   const regularClose = point.regular_close;
-  const carriesCompletedClose = window.SigmaMath.isAfterHoursCloseCarry(
+  const carriesCompletedClose = window.SigmaMath.isCompletedSessionCarry(
     row.dashboard_view,
     row.payload_anchor_date,
     state.cache?.target_completed_session,
     state.live.marketSession,
     regularClose?.trading_date,
   );
-  const usesAfterHoursClose = row.dashboard_view === "today"
-    && state.live.marketSession === "afterhours"
+  const stalePremarketAnchor = state.live.marketSession === "premarket"
+    && regularClose?.trading_date
+    && regularClose.trading_date !== row.payload_anchor_date;
+  const usesCompletedClose = row.dashboard_view === "today"
     && Number(regularClose?.price) > 0
-    && regularClose?.trading_date === point.trading_date;
+    && (
+      window.SigmaMath.isPostCloseSession(state.live.marketSession)
+      || stalePremarketAnchor
+    );
   if (!window.SigmaMath.isCurrentAnchor(
     row.dashboard_view,
     row.payload_anchor_date,
@@ -602,7 +612,7 @@ function applyLivePriceToRow(row, point) {
   }
   if (!window.SigmaMath.isNewerPrice(point.ts_event, row.price_timestamp)) return false;
   const anchor = row.live_anchor_price || row.anchor_price || row.snapshot_last_price || row.last_price;
-  const metricPrice = usesAfterHoursClose ? regularClose.price : point.price;
+  const metricPrice = usesCompletedClose ? regularClose.price : point.price;
   const metrics = window.SigmaMath.calculateLiveMetrics(metricPrice, anchor, row.sigma_1d_pct);
   if (!metrics) return false;
 
@@ -616,10 +626,11 @@ function applyLivePriceToRow(row, point) {
   row.price_session = point.session;
   row.price_trading_date = point.trading_date;
   row.price_stale = Boolean(point.is_stale);
-  if (point.session === "regular" || usesAfterHoursClose) {
-    row.regular_price = Number(usesAfterHoursClose ? regularClose.price : point.price);
-    row.regular_timestamp = usesAfterHoursClose ? regularClose.ts_event : point.ts_event;
-    row.regular_source = usesAfterHoursClose
+  row.holding_completed_close = usesCompletedClose;
+  if (point.session === "regular" || usesCompletedClose) {
+    row.regular_price = Number(usesCompletedClose ? regularClose.price : point.price);
+    row.regular_timestamp = usesCompletedClose ? regularClose.ts_event : point.ts_event;
+    row.regular_source = usesCompletedClose
       ? regularClose.source_dataset
       : point.source_dataset;
     row.regular_is_live = true;
@@ -808,6 +819,7 @@ function initializeRows(payload, view) {
       row.regular_timestamp = payload.last_update_utc;
       row.regular_source = payload.price_source;
       row.regular_is_live = false;
+      row.holding_completed_close = false;
       row.regular_gain_pct = window.SigmaMath.primaryGainPct(view, row);
       row.extended_price = null;
       row.extended_timestamp = null;

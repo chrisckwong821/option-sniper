@@ -98,7 +98,11 @@
       || payloadAnchorDate === targetCompletedSession;
   }
 
-  function isAfterHoursCloseCarry(
+  function isPostCloseSession(session) {
+    return ["afterhours", "overnight", "closed"].includes(session);
+  }
+
+  function isCompletedSessionCarry(
     view,
     payloadAnchorDate,
     targetCompletedSession,
@@ -106,7 +110,7 @@
     regularTradingDate,
   ) {
     return view === "today"
-      && marketSession === "afterhours"
+      && (isPostCloseSession(marketSession) || marketSession === "premarket")
       && Boolean(targetCompletedSession)
       && payloadAnchorDate !== targetCompletedSession
       && regularTradingDate === targetCompletedSession;
@@ -167,9 +171,10 @@
     calculateLiveMetrics,
     calculatePriceChange,
     calculateSigmaHorizon,
-    isAfterHoursCloseCarry,
+    isCompletedSessionCarry,
     isCurrentAnchor,
     isNewerPrice,
+    isPostCloseSession,
     isPriceForTradingDate,
     paginateRows,
     primaryGainPct,

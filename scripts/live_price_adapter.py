@@ -601,14 +601,12 @@ async def mock_feed(
         if session == "closed":
             session = "afterhours"
         trading_date = trading_date_at(now)
-        if session == "afterhours":
-            regular_time = now.astimezone(EASTERN).replace(
-                hour=15,
-                minute=59,
-                second=59,
-                microsecond=0,
-            ).astimezone(UTC)
-            missing_regular = set(store.symbols_missing_regular_close(trading_date))
+        if session in {"afterhours", "overnight"}:
+            regular_date = universe.get("anchor_date", trading_date)
+            regular_time = datetime.fromisoformat(
+                f"{regular_date}T15:59:59"
+            ).replace(tzinfo=EASTERN).astimezone(UTC)
+            missing_regular = set(store.symbols_missing_regular_close(regular_date))
             for ticker, anchor in anchors.items():
                 if ticker in missing_regular:
                     store.update_price(
@@ -617,7 +615,7 @@ async def mock_feed(
                         regular_time,
                         "MOCK.LIVE",
                         session_override="regular",
-                        trading_date_override=trading_date,
+                        trading_date_override=regular_date,
                     )
         for index, (ticker, anchor) in enumerate(anchors.items()):
             wave = math.sin(phase + index * 0.43) * 0.0025

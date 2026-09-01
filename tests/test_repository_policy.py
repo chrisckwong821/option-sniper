@@ -90,15 +90,15 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.assertNotIn("DATABENTO_", dockerfile)
         self.assertNotIn("DATABENTO_", compose)
 
-    def test_production_refresh_runs_after_final_equity_summary(self):
+    def test_production_refresh_runs_before_premarket_ranking(self):
         timer = (ROOT / "deploy" / "option-sniper-refresh.timer").read_text()
 
         self.assertIn(
-            "OnCalendar=Mon..Fri *-*-* 20:20:00 America/New_York",
+            "OnCalendar=Tue..Sat *-*-* 04:05:00 America/New_York",
             timer,
         )
         self.assertIn(
-            "OnCalendar=Mon..Fri *-*-* 20:30:00 America/New_York",
+            "OnCalendar=Tue..Sat *-*-* 05:00:00 America/New_York",
             timer,
         )
 

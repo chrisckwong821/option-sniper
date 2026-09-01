@@ -88,12 +88,12 @@ Nasdaq listing universe and runs one bounded Databento refresh. If that refresh
 fails, an older valid cache is served with a visible stale warning; without any
 valid cache, startup fails clearly.
 
-Production also runs `option-sniper-refresh.timer` at 20:20 America/New_York on
-weekdays, shortly after the final EQUS.SUMMARY publication, with a no-op retry at
-20:30. The one-shot job builds the next cache while the current adapter keeps
-serving viewers, then recreates the adapter only after the cache is written
-successfully. It performs no Databento download when the cache already covers
-the latest completed session and current screening policy.
+Production also runs `option-sniper-refresh.timer` at 04:05 America/New_York on
+Tuesday through Saturday, with a no-op retry at 05:00. The completed session's
+close, gain, and Z-score remain active overnight; the one-shot job rolls the
+live table to its new anchor for pre-market only after a valid cache is written.
+It performs no Databento download when the cache already covers the latest
+completed session and current screening policy.
 
 Useful controls:
 
