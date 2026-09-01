@@ -89,6 +89,9 @@ assert.equal(
 assert.equal(SigmaMath.isPostCloseSession("overnight"), true);
 assert.equal(SigmaMath.isPostCloseSession("closed"), true);
 assert.equal(SigmaMath.isPostCloseSession("premarket"), false);
+assert.equal(SigmaMath.displaysCompletedSession("overnight", false), true);
+assert.equal(SigmaMath.displaysCompletedSession("premarket", true), true);
+assert.equal(SigmaMath.displaysCompletedSession("premarket", false), false);
 assert.equal(
   SigmaMath.isCompletedSessionCarry(
     "today", "2026-08-28", "2026-08-31", "overnight", "2026-08-31",

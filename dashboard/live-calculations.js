@@ -102,6 +102,10 @@
     return ["afterhours", "overnight", "closed"].includes(session);
   }
 
+  function displaysCompletedSession(marketSession, holdingCompletedClose) {
+    return isPostCloseSession(marketSession) || Boolean(holdingCompletedClose);
+  }
+
   function isCompletedSessionCarry(
     view,
     payloadAnchorDate,
@@ -171,6 +175,7 @@
     calculateLiveMetrics,
     calculatePriceChange,
     calculateSigmaHorizon,
+    displaysCompletedSession,
     isCompletedSessionCarry,
     isCurrentAnchor,
     isNewerPrice,

@@ -294,11 +294,13 @@ function extendedPriceState(row) {
 function priceStackMarkup(row, includeExtendedChange = false) {
   const priceState = extendedPriceState(row);
   const regularTime = formatPriceTime(row.regular_timestamp);
-  const liveRegularLabel = window.SigmaMath.isPostCloseSession(state.live.marketSession)
-    || row.holding_completed_close
-    ? "Last close"
-    : "Regular";
-  const regularLabel = `${row.regular_is_live ? liveRegularLabel : "Prior close"}${regularTime ? ` · ${regularTime}` : ""}`;
+  const displaysCompletedSession = window.SigmaMath.displaysCompletedSession(
+    state.live.marketSession,
+    row.holding_completed_close,
+  );
+  const regularLabel = `${
+    displaysCompletedSession ? "Last close" : row.regular_is_live ? "Regular" : "Prior close"
+  }${regularTime ? ` · ${regularTime}` : ""}`;
 
   let extendedMarkup = "";
   if (priceState.hasExtendedPrice) {
@@ -340,9 +342,13 @@ function gainStackMarkup(row) {
   const isSavedList = row.dashboard_view === "yesterday";
   const regularGain = window.SigmaMath.primaryGainPct(row.dashboard_view, row);
   const regularDirection = regularGain >= 0 ? "positive" : "negative";
+  const displaysCompletedSession = window.SigmaMath.displaysCompletedSession(
+    state.live.marketSession,
+    row.holding_completed_close,
+  );
   const regularLabel = isSavedList
     ? "Saved gain"
-    : row.regular_is_live ? "Today's move" : "Prior day";
+    : displaysCompletedSession || row.regular_is_live ? "Today's move" : "Prior day";
   const priceState = extendedPriceState(row);
   let extendedMarkup = "";
 
