@@ -48,6 +48,20 @@ assert.equal(SigmaMath.primaryGainPct("yesterday", {
   gain_pct: -0.8,
   saved_gain_pct: 5.5,
 }), 5.5);
+assert.equal(SigmaMath.isLiveGainSession("premarket"), false);
+assert.equal(SigmaMath.isLiveGainSession("regular"), true);
+assert.equal(SigmaMath.primaryGainPct("yesterday", {
+  gain_pct: 5.5,
+  regular_gain_pct: 0.75,
+  regular_is_live: false,
+  saved_gain_pct: 5.5,
+}, "regular"), null);
+assert.equal(SigmaMath.primaryGainPct("yesterday", {
+  gain_pct: 0.75,
+  regular_gain_pct: 0.75,
+  regular_is_live: true,
+  saved_gain_pct: 5.5,
+}, "regular"), 0.75);
 
 assert.equal(
   SigmaMath.isNewerPrice("2026-08-28T13:30:01Z", "2026-08-28T13:30:00Z"),

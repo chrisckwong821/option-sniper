@@ -49,21 +49,32 @@
     return new Date(start + milliseconds).toISOString();
   }
 
-  function primaryGainPct(view, row) {
-    const candidates = view === "yesterday"
-      ? [row.saved_gain_pct, row.snapshot_gain_pct, row.gain_pct]
-      : [
+  function isLiveGainSession(session) {
+    return ["regular", "afterhours", "overnight", "closed"].includes(session);
+  }
+
+  function primaryGainPct(view, row, marketSession) {
+    let candidates;
+    if (view === "yesterday") {
+      if (isLiveGainSession(marketSession)) {
+        candidates = row.regular_is_live ? [row.regular_gain_pct, row.gain_pct] : [];
+      } else {
+        candidates = [row.saved_gain_pct, row.snapshot_gain_pct, row.gain_pct];
+      }
+    } else {
+      candidates = [
         row.regular_gain_pct,
         row.prior_session_gain_pct,
         row.snapshot_gain_pct,
         row.gain_pct,
       ];
+    }
     for (const value of candidates) {
       if (value === null || value === undefined || value === "") continue;
       const parsed = Number(value);
       if (Number.isFinite(parsed)) return parsed;
     }
-    return 0;
+    return view === "yesterday" && isLiveGainSession(marketSession) ? null : 0;
   }
 
   function sessionLabel(session) {
@@ -185,6 +196,7 @@
     displaysCompletedSession,
     isCompletedSessionCarry,
     isCurrentAnchor,
+    isLiveGainSession,
     isNewerPrice,
     isPostCloseSession,
     isPriceForTradingDate,

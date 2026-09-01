@@ -239,7 +239,7 @@ function allRows() {
 }
 
 function displayGainPct(row, view) {
-  return window.SigmaMath.primaryGainPct(view, row);
+  return window.SigmaMath.primaryGainPct(view, row, state.live.marketSession);
 }
 
 function visibleRows(view = state.view) {
@@ -279,7 +279,12 @@ function visibleRows(view = state.view) {
         if (settings.sortKey === "abs_z_score") return Math.abs(Number(row.z_score));
         return Number(row[settings.sortKey]);
       };
-      const primary = (sortValue(a) - sortValue(b)) * direction;
+      const aValue = sortValue(a);
+      const bValue = sortValue(b);
+      const aMissing = !Number.isFinite(aValue);
+      const bMissing = !Number.isFinite(bValue);
+      if (aMissing !== bMissing) return aMissing ? 1 : -1;
+      const primary = (aValue - bValue) * direction;
       return primary || (b.z_score - a.z_score);
     });
 }
@@ -352,14 +357,21 @@ function priceStackMarkup(row, includeExtendedChange = false) {
 
 function gainStackMarkup(row) {
   const isSavedList = row.dashboard_view === "yesterday";
-  const regularGain = window.SigmaMath.primaryGainPct(row.dashboard_view, row);
-  const regularDirection = regularGain >= 0 ? "positive" : "negative";
+  const regularGain = window.SigmaMath.primaryGainPct(
+    row.dashboard_view,
+    row,
+    state.live.marketSession,
+  );
+  const hasRegularGain = Number.isFinite(regularGain);
+  const regularDirection = hasRegularGain && regularGain >= 0 ? "positive" : "negative";
   const displaysCompletedSession = window.SigmaMath.displaysCompletedSession(
     state.live.marketSession,
     row.holding_completed_close,
   );
   const regularLabel = isSavedList
-    ? "Saved gain"
+    ? window.SigmaMath.isLiveGainSession(state.live.marketSession)
+      ? row.regular_is_live ? "Today's move" : "Awaiting trade"
+      : "Saved gain"
     : displaysCompletedSession || row.regular_is_live ? "Today's move" : "Prior day";
   const priceState = extendedPriceState(row);
   let extendedMarkup = "";
@@ -376,7 +388,7 @@ function gainStackMarkup(row) {
   return `
     <span class="gain-stack">
       <span class="gain-primary">
-        <span class="number movement ${regularDirection}">${formatSigned(regularGain, 2, "%")}</span>
+        <span class="number movement ${hasRegularGain ? regularDirection : ""}">${hasRegularGain ? formatSigned(regularGain, 2, "%") : "--"}</span>
         <span class="gain-session regular">${regularLabel}</span>
       </span>
       ${extendedMarkup}
@@ -619,12 +631,14 @@ function applyLivePriceToRow(row, point) {
   const stalePremarketAnchor = state.live.marketSession === "premarket"
     && regularClose?.trading_date
     && regularClose.trading_date !== row.payload_anchor_date;
-  const usesCompletedClose = row.dashboard_view === "today"
-    && Number(regularClose?.price) > 0
-    && (
+  const usesTodayCompletedClose = row.dashboard_view === "today" && (
       window.SigmaMath.isPostCloseSession(state.live.marketSession)
       || stalePremarketAnchor
-    );
+  );
+  const usesSavedListCompletedClose = row.dashboard_view === "yesterday"
+    && window.SigmaMath.isPostCloseSession(state.live.marketSession);
+  const usesCompletedClose = Number(regularClose?.price) > 0
+    && (usesTodayCompletedClose || usesSavedListCompletedClose);
   if (!window.SigmaMath.isCurrentAnchor(
     row.dashboard_view,
     row.payload_anchor_date,
@@ -660,10 +674,11 @@ function applyLivePriceToRow(row, point) {
     row.regular_source = usesCompletedClose
       ? regularClose.source_dataset
       : point.source_dataset;
+    row.regular_trading_date = usesCompletedClose
+      ? regularClose.trading_date
+      : point.trading_date;
     row.regular_is_live = true;
-    row.regular_gain_pct = row.dashboard_view === "yesterday"
-      ? row.saved_gain_pct
-      : metrics.gainPct;
+    row.regular_gain_pct = metrics.gainPct;
     if (point.session === "regular") {
       row.extended_price = null;
       row.extended_timestamp = null;
@@ -699,6 +714,11 @@ function handlePriceMessage(message) {
   state.live.lastMessageAt = Date.now();
   const previousMarketSession = state.live.marketSession;
   state.live.marketSession = message.market_session || state.live.marketSession;
+  if (previousMarketSession !== "regular" && state.live.marketSession === "regular") {
+    allRows().forEach((row) => {
+      if (row.regular_trading_date !== message.trading_date) row.regular_is_live = false;
+    });
+  }
   if (previousMarketSession !== "premarket" && state.live.marketSession === "premarket") {
     state.viewSettings.today.page = 1;
   }
@@ -849,9 +869,14 @@ function initializeRows(payload, view) {
       row.regular_price = row.last_price;
       row.regular_timestamp = payload.last_update_utc;
       row.regular_source = payload.price_source;
+      row.regular_trading_date = payload.data_date;
       row.regular_is_live = false;
       row.holding_completed_close = false;
-      row.regular_gain_pct = window.SigmaMath.primaryGainPct(view, row);
+      row.regular_gain_pct = window.SigmaMath.primaryGainPct(
+        view,
+        row,
+        state.live.marketSession,
+      );
       row.extended_price = null;
       row.extended_timestamp = null;
       row.extended_session = null;

@@ -105,7 +105,7 @@
                 <th>Sector</th>
                 <th class="numeric"><button class="sort-button" data-sort="market_cap_usd" type="button">Market cap</button></th>
                 <th class="numeric"><span class="term-tip label-tip" tabindex="0" data-tooltip="Regular-session close on top. When available, the lower line shows the latest pre-market, after-hours, or overnight price and its change versus that close.">Last</span></th>
-                <th class="numeric"><button class="sort-button term-tip" data-sort="gain_pct" data-tooltip="Regular-close gain stays on top. When available, the lower value is the pre-market, after-hours, or overnight move versus that close." type="button">Gain</button></th>
+                <th class="numeric"><button class="sort-button term-tip" data-sort="gain_pct" data-tooltip="Before the bell, this shows the gain that qualified the saved list. Once regular trading begins, it switches to today's live move versus yesterday's close. Extended-session moves appear separately." type="button">Gain</button></th>
                 <th class="numeric"><button class="sort-button term-tip" data-sort="sigma_1d_pct" data-tooltip="Option-implied expected move for the stored close-to-close horizon. Annualized IV is scaled by sqrt(actual elapsed calendar time / 365), so weekends and market holidays use a longer horizon." type="button">Expected &sigma;</button></th>
                 <th><button class="sort-button term-tip active" data-sort="z_score" data-tooltip="Log return from the saved return anchor divided by Expected sigma for the full close-to-close horizon. Above 1 means the move exceeded one expected standard deviation." type="button">Z-score</button></th>
                 <th><span class="term-tip label-tip" tabindex="0" data-tooltip="Confidence in the IV denominator. High uses several tight two-sided strikes; medium has more spread sensitivity; low is provisional.">IV Reliability</span></th>
@@ -162,7 +162,7 @@
       <span id="iv-note">IV snapshot --</span>
     </footer>
     <div id="live-announcer" class="visually-hidden" aria-live="polite"></div>
-    <script src="live-calculations.js?v=20260901-premarket-priority"></script>
-    <script src="app.js?v=20260901-premarket-priority"></script>
+    <script src="live-calculations.js?v=20260901-live-saved-list-gain"></script>
+    <script src="app.js?v=20260901-live-saved-list-gain"></script>
   </body>
 </html>
