@@ -88,6 +88,7 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.assertIn("USER 10001:10001", dockerfile)
         self.assertIn('"--refresh-mode", "never"', dockerfile)
         self.assertIn('"127.0.0.1:8765:8765"', compose)
+        self.assertIn("discord-alerts.sqlite3", compose)
         self.assertIn("read_only: true", compose)
         self.assertIn("no-new-privileges:true", compose)
         self.assertIn("max-size: 10m", compose)

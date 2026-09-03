@@ -107,3 +107,6 @@ sudo systemctl enable --now option-sniper-refresh.timer
 sudo docker inspect --format \
   'deployed image={{.Config.Image}} status={{.State.Status}} health={{.State.Health.Status}} restarts={{.RestartCount}}' \
   sigma-tape
+sudo docker inspect --format \
+  'alerter image={{.Config.Image}} status={{.State.Status}} health={{.State.Health.Status}} restarts={{.RestartCount}}' \
+  sigma-tape-alerter
