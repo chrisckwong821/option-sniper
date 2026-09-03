@@ -36,8 +36,11 @@ sudo install -o root -g root -m 0600 /dev/null /etc/sigma-tape/sigma-tape.env
 sudoedit /etc/sigma-tape/sigma-tape.env
 ```
 
-It must define `DATABENTO_LIVE_API_KEY` and `DATABENTO_OPTIONS_API_KEY`.
-Do not add either value to an image, release archive, or GitHub Actions log.
+It must define `DATABENTO_LIVE_API_KEY`, `DATABENTO_OPTIONS_API_KEY`, a rotated
+`DISCORD_BOT_TOKEN`, and `DISCORD_CHANNEL_ID`. `ZSCORE_ALERT_THRESHOLD` is
+optional and defaults to `1.0`.
+Do not add any credential value to an image, release archive, or GitHub Actions
+log.
 
 The container uses `restart: unless-stopped`, so Docker restores it after a host
 reboot. The image contains no credentials or market snapshots. Production starts

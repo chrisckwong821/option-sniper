@@ -50,6 +50,9 @@ class RepositoryPolicyTests(unittest.TestCase):
     def test_no_credential_shaped_values_are_tracked(self):
         patterns = {
             "Databento": re.compile(r"db-[A-Za-z0-9]{24,}"),
+            "Discord bot": re.compile(
+                r"[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}"
+            ),
             "ThetaData": re.compile(r"td1_prod_[A-Za-z0-9]{16,}"),
             "JWT": re.compile(r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}"),
         }
@@ -95,11 +98,11 @@ class RepositoryPolicyTests(unittest.TestCase):
         timer = (ROOT / "deploy" / "option-sniper-refresh.timer").read_text()
 
         self.assertIn(
-            "OnCalendar=Tue..Sat *-*-* 04:05:00 America/New_York",
+            "OnCalendar=Tue..Sat *-*-* 03:15:00 America/New_York",
             timer,
         )
         self.assertIn(
-            "OnCalendar=Tue..Sat *-*-* 05:00:00 America/New_York",
+            "OnCalendar=Tue..Sat *-*-* 03:45:00 America/New_York",
             timer,
         )
 

@@ -92,12 +92,33 @@ The production container starts in `never` mode so a deployment cannot block on
 historical-data availability. Its mounted cache remains visible until the
 dedicated pre-market refresh job atomically replaces it.
 
-Production also runs `option-sniper-refresh.timer` at 04:05 America/New_York on
-Tuesday through Saturday, with a no-op retry at 05:00. The completed session's
+Production also runs `option-sniper-refresh.timer` at 03:15 America/New_York on
+Tuesday through Saturday, with a no-op retry at 03:45. The completed session's
 close, gain, and Z-score remain active overnight; the one-shot job rolls the
-live table to its new anchor for pre-market only after a valid cache is written.
+live table to its new anchor before pre-market only after a valid cache is written.
 It performs no Databento download when the cache already covers the latest
 completed session and current screening policy.
+
+## Discord +1 sigma alerts
+
+Production includes a small alert worker that consumes the backend WebSocket;
+it does not open a second Databento connection. Its alert cycle starts at 04:00
+America/New_York and covers pre-market, regular, after-hours, and the following
+overnight session. The first fresh snapshot sends every tracked ticker already
+at or above +1 expected sigma. Later alerts require an upward crossing, and a
+SQLite ledger ensures that each ticker is sent at most once per alert cycle.
+
+Set these values only in the host-owned `/etc/sigma-tape/sigma-tape.env` file:
+
+```bash
+DISCORD_BOT_TOKEN=ROTATED_TOKEN
+DISCORD_CHANNEL_ID=TARGET_CHANNEL_ID
+ZSCORE_ALERT_THRESHOLD=1.0
+```
+
+The bot needs View Channel and Send Messages permission in the configured
+channel. Never commit its token. If a token is pasted into chat, logs, or source
+control, reset it in the Discord Developer Portal before deployment.
 
 Useful controls:
 

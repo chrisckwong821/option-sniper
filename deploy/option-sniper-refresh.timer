@@ -2,8 +2,8 @@
 Description=Schedule Option Sniper's pre-market universe refresh
 
 [Timer]
-OnCalendar=Tue..Sat *-*-* 04:05:00 America/New_York
-OnCalendar=Tue..Sat *-*-* 05:00:00 America/New_York
+OnCalendar=Tue..Sat *-*-* 03:15:00 America/New_York
+OnCalendar=Tue..Sat *-*-* 03:45:00 America/New_York
 Persistent=true
 RandomizedDelaySec=30
 Unit=option-sniper-refresh.service
