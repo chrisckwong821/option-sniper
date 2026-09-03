@@ -112,9 +112,12 @@ Set these values only in the host-owned `/etc/sigma-tape/sigma-tape.env` file:
 
 ```bash
 DISCORD_BOT_TOKEN=ROTATED_TOKEN
-DISCORD_CHANNEL_ID=TARGET_CHANNEL_ID
+DISCORD_CHANNEL_ID=1544929277009465374
 ZSCORE_ALERT_THRESHOLD=1.0
 ```
+
+The channel shown above is the built-in default for this deployment; the
+environment variable can override it.
 
 The bot needs View Channel and Send Messages permission in the configured
 channel. Never commit its token. If a token is pasted into chat, logs, or source

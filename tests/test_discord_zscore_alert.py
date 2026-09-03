@@ -8,6 +8,7 @@ from scripts.discord_zscore_alert import (
     AlertEngine,
     AlertStore,
     AlertUniverse,
+    DEFAULT_DISCORD_CHANNEL_ID,
     DefinitiveSendError,
     alert_cycle_date_at,
     build_universe,
@@ -50,6 +51,9 @@ class AlertCycleTests(unittest.TestCase):
             websocket_url("https://tape.example.com/"),
             "wss://tape.example.com/ws/prices",
         )
+
+    def test_repository_has_the_requested_default_channel(self):
+        self.assertEqual(DEFAULT_DISCORD_CHANNEL_ID, "1544929277009465374")
 
     def test_universe_uses_next_market_session(self):
         universe = build_universe({

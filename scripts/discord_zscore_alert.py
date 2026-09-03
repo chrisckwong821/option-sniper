@@ -26,6 +26,7 @@ ALERT_SESSIONS = frozenset({"premarket", "regular", "afterhours", "overnight"})
 DEFAULT_BACKEND_URL = "http://backend:8765"
 DEFAULT_DATABASE = Path("/app/.cache/sigma-tape/discord-alerts.sqlite3")
 DEFAULT_DISCORD_API = "https://discord.com/api/v10"
+DEFAULT_DISCORD_CHANNEL_ID = "1544929277009465374"
 DEFAULT_THRESHOLD = 1.0
 Z_SCORE_EPSILON = 1e-9
 
@@ -427,11 +428,9 @@ def parse_args() -> Config:
     )
     args = parser.parse_args()
     token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
-    channel_id = os.environ.get("DISCORD_CHANNEL_ID", "").strip()
+    channel_id = os.environ.get("DISCORD_CHANNEL_ID", DEFAULT_DISCORD_CHANNEL_ID).strip()
     if not token:
         parser.error("DISCORD_BOT_TOKEN is required")
-    if not channel_id:
-        parser.error("DISCORD_CHANNEL_ID is required")
     return Config(
         backend_url=args.backend_url,
         database=args.database,

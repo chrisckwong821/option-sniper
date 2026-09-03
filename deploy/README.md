@@ -36,9 +36,10 @@ sudo install -o root -g root -m 0600 /dev/null /etc/sigma-tape/sigma-tape.env
 sudoedit /etc/sigma-tape/sigma-tape.env
 ```
 
-It must define `DATABENTO_LIVE_API_KEY`, `DATABENTO_OPTIONS_API_KEY`, a rotated
-`DISCORD_BOT_TOKEN`, and `DISCORD_CHANNEL_ID`. `ZSCORE_ALERT_THRESHOLD` is
-optional and defaults to `1.0`.
+It must define `DATABENTO_LIVE_API_KEY`, `DATABENTO_OPTIONS_API_KEY`, and a
+rotated `DISCORD_BOT_TOKEN`. `DISCORD_CHANNEL_ID` defaults to the production
+alert channel and `ZSCORE_ALERT_THRESHOLD` defaults to `1.0`; either can be
+overridden in this file.
 Do not add any credential value to an image, release archive, or GitHub Actions
 log.
 

@@ -35,7 +35,7 @@ services:
   alerter:
     image: sigma-tape:${SIGMA_TAPE_VERSION:-local}
     container_name: sigma-tape-alerter
-    restart: unless-stopped
+    restart: "on-failure:10"
     init: true
     entrypoint: ["python", "-m", "scripts.discord_zscore_alert"]
     env_file:
