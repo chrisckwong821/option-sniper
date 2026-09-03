@@ -104,9 +104,25 @@ sudo install -o root -g root -m 0644 \
   /etc/systemd/system/option-sniper-refresh.timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now option-sniper-refresh.timer
+
+for _ in $(seq 1 12); do
+  alerter_state="$(sudo docker inspect --format \
+    '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' \
+    sigma-tape-alerter 2>/dev/null || true)"
+  if [[ "$alerter_state" == "running healthy" ]] || \
+     [[ "$alerter_state" != running* ]]; then
+    break
+  fi
+  sleep 5
+done
+
 sudo docker inspect --format \
   'deployed image={{.Config.Image}} status={{.State.Status}} health={{.State.Health.Status}} restarts={{.RestartCount}}' \
   sigma-tape
 sudo docker inspect --format \
   'alerter image={{.Config.Image}} status={{.State.Status}} health={{.State.Health.Status}} restarts={{.RestartCount}}' \
   sigma-tape-alerter
+if [[ "$alerter_state" != "running healthy" ]]; then
+  echo "Discord alerter did not become healthy; safe diagnostic output follows" >&2
+  sudo docker logs --tail 20 sigma-tape-alerter >&2 || true
+fi

@@ -123,6 +123,8 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.assertIn("sha256sum", deploy_script)
         self.assertIn("rollback", deploy_script)
         self.assertIn("<title>Option Sniper</title>", deploy_script)
+        self.assertIn('alerter_state="$(sudo docker inspect', deploy_script)
+        self.assertIn("Discord alerter did not become healthy", deploy_script)
 
 
 if __name__ == "__main__":
