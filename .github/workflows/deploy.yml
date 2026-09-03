@@ -53,9 +53,19 @@ jobs:
             "$revision" "$archive" "$checksum" >> "$GITHUB_ENV"
 
       - name: Upload and deploy
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
         run: |
           key_path="$RUNNER_TEMP/option-sniper-ssh-key"
           known_hosts="$RUNNER_TEMP/option-sniper-known-hosts"
+          discord_token_path="$RUNNER_TEMP/option-sniper-discord-token"
+          remote_discord_token="/tmp/option-sniper-discord-token-$REVISION"
+          if [[ -z "$DISCORD_BOT_TOKEN" ]]; then
+            echo "DISCORD_BOT_TOKEN repository secret is required" >&2
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$DISCORD_BOT_TOKEN" > "$discord_token_path"
           ssh_options=(
             -i "$key_path"
             -o BatchMode=yes
@@ -69,6 +79,10 @@ jobs:
           scp "${ssh_options[@]}" \
             "$RUNNER_TEMP/$ARCHIVE" \
             "$DEPLOY_USER@$DEPLOY_HOST:/tmp/$ARCHIVE"
+          scp "${ssh_options[@]}" \
+            "$discord_token_path" \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_discord_token"
           ssh "${ssh_options[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "bash -s -- '$REVISION' '$ARCHIVE_SHA256'" \
+            "bash -s -- '$REVISION' '$ARCHIVE_SHA256' '$remote_discord_token'" \
             < deploy/ec2-deploy.sh
+          rm -f "$discord_token_path"

@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 revision="${1:?revision is required}"
 expected_sha256="${2:?archive checksum is required}"
+discord_token_file="${3:?Discord token file is required}"
 
 if [[ ! "$revision" =~ ^[0-9a-f]{8,40}$ ]]; then
   echo "Invalid revision" >&2
@@ -12,6 +13,10 @@ if [[ ! "$expected_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "Invalid archive checksum" >&2
   exit 2
 fi
+if [[ "$discord_token_file" != "/tmp/option-sniper-discord-token-$revision" ]]; then
+  echo "Invalid Discord token path" >&2
+  exit 2
+fi
 
 archive="/tmp/option-sniper-${revision}.tar.gz"
 release_root="/opt/sigma-tape/releases"
@@ -19,11 +24,16 @@ release="$release_root/$revision"
 current_link="/opt/sigma-tape/current"
 previous="$(readlink -f "$current_link" 2>/dev/null || true)"
 staging=""
+environment_temp=""
 
 cleanup() {
   rm -f "$archive"
+  rm -f "$discord_token_file"
   if [[ -n "$staging" && -d "$staging" ]]; then
     sudo rm -rf "$staging"
+  fi
+  if [[ -n "$environment_temp" ]]; then
+    sudo rm -f "$environment_temp"
   fi
 }
 trap cleanup EXIT
@@ -34,9 +44,27 @@ if [[ "$actual_sha256" != "$expected_sha256" ]]; then
   exit 1
 fi
 
-sudo test -r /etc/sigma-tape/sigma-tape.env
+if [[ ! -s "$discord_token_file" ]] || \
+   [[ "$(wc -l < "$discord_token_file")" -gt 0 ]]; then
+  echo "Discord token file is empty or contains a newline" >&2
+  exit 1
+fi
+
+environment_file="/etc/sigma-tape/sigma-tape.env"
+sudo test -r "$environment_file"
 sudo test -d /var/lib/sigma-tape
 sudo install -d -m 0755 "$release_root"
+
+environment_temp="$(sudo mktemp /etc/sigma-tape/.sigma-tape.env.XXXXXX)"
+sudo grep -v '^DISCORD_BOT_TOKEN=' "$environment_file" \
+  | sudo tee "$environment_temp" >/dev/null || true
+printf 'DISCORD_BOT_TOKEN=' | sudo tee -a "$environment_temp" >/dev/null
+sudo tee -a "$environment_temp" < "$discord_token_file" >/dev/null
+printf '\n' | sudo tee -a "$environment_temp" >/dev/null
+sudo chown root:root "$environment_temp"
+sudo chmod 0600 "$environment_temp"
+sudo mv "$environment_temp" "$environment_file"
+environment_temp=""
 
 if [[ ! -f "$release/.release-revision" ]] || \
    [[ "$(cat "$release/.release-revision" 2>/dev/null)" != "$revision" ]]; then
@@ -125,4 +153,9 @@ sudo docker inspect --format \
 if [[ "$alerter_state" != "running healthy" ]]; then
   echo "Discord alerter did not become healthy; safe diagnostic output follows" >&2
   sudo docker logs --tail 20 sigma-tape-alerter >&2 || true
+else
+  sleep 30
+  sudo docker logs --since 5m sigma-tape-alerter 2>&1 \
+    | grep -E '"event": "(alert_stream_connecting|discord_alert_sent|discord_alert_uncertain|discord_alert_released)"' \
+    | tail -n 100 || true
 fi

@@ -119,12 +119,15 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.assertIn("StrictHostKeyChecking=yes", workflow)
         self.assertIn("secrets.EC2_SSH_KEY", workflow)
         self.assertIn("secrets.EC2_KNOWN_HOSTS", workflow)
+        self.assertIn("secrets.DISCORD_BOT_TOKEN", workflow)
         self.assertNotIn("DATABENTO_", workflow)
         self.assertIn("sha256sum", deploy_script)
         self.assertIn("rollback", deploy_script)
         self.assertIn("<title>Option Sniper</title>", deploy_script)
         self.assertIn('alerter_state="$(sudo docker inspect', deploy_script)
         self.assertIn("Discord alerter did not become healthy", deploy_script)
+        self.assertIn("option-sniper-discord-token-$revision", deploy_script)
+        self.assertIn("discord_alert_sent", deploy_script)
 
 
 if __name__ == "__main__":

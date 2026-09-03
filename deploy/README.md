@@ -126,6 +126,8 @@ The GitHub `production` environment must define these encrypted secrets:
 - `EC2_USER`: SSH login user.
 - `EC2_SSH_KEY`: private deployment key.
 - `EC2_KNOWN_HOSTS`: pinned OpenSSH host-key line for `EC2_HOST`.
+- `DISCORD_BOT_TOKEN`: bot credential copied into the root-owned EC2 environment
+  file during deployment without being printed.
 
 Historical and live Databento keys remain in
 `/etc/sigma-tape/sigma-tape.env`; they are not GitHub deployment secrets.
