@@ -128,6 +128,7 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.assertIn("Discord alerter did not become healthy", deploy_script)
         self.assertIn("option-sniper-discord-token-$revision", deploy_script)
         self.assertIn("discord_alert_sent", deploy_script)
+        self.assertIn("up -d --no-build --force-recreate", deploy_script)
 
 
 if __name__ == "__main__":

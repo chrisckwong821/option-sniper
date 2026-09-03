@@ -101,7 +101,7 @@ sudo env SIGMA_TAPE_VERSION="$revision" \
   docker compose -f deploy/compose.yml build
 
 if ! sudo env SIGMA_TAPE_VERSION="$revision" \
-  docker compose -f deploy/compose.yml up -d --no-build; then
+  docker compose -f deploy/compose.yml up -d --no-build --force-recreate; then
   rollback
   exit 1
 fi
