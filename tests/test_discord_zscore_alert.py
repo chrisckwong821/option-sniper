@@ -118,6 +118,11 @@ class AlertEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent, 2)
         self.assertEqual([item[0].ticker for item in self.sent], ["AAA", "BBB"])
         self.assertEqual(self.store.count(), 2)
+        self.assertEqual(self.store.summary("2026-08-28"), {
+            "count": 2,
+            "statuses": {"sent": 2},
+            "sent_tickers": ["AAA", "BBB"],
+        })
 
     async def test_crossing_recrossing_and_replayed_prices_alert_only_once(self):
         self.assertEqual(

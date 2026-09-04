@@ -210,6 +210,25 @@ class AlertStore:
     def count(self) -> int:
         return int(self.connection.execute("SELECT COUNT(*) FROM alerts").fetchone()[0])
 
+    def summary(self, trading_date: str) -> dict[str, Any]:
+        rows = self.connection.execute(
+            """
+            SELECT ticker, status
+            FROM alerts
+            WHERE trading_date = ?
+            ORDER BY ticker
+            """,
+            (trading_date,),
+        ).fetchall()
+        statuses: dict[str, int] = {}
+        for _, status in rows:
+            statuses[status] = statuses.get(status, 0) + 1
+        return {
+            "count": len(rows),
+            "statuses": statuses,
+            "sent_tickers": [ticker for ticker, status in rows if status == "sent"],
+        }
+
     def close(self) -> None:
         self.connection.close()
 
@@ -469,6 +488,7 @@ async def run(config: Config) -> None:
                             "target_session": universe.target_session,
                             "tracked_symbols": len(universe.rows),
                             "existing_alerts": store.count(),
+                            "cycle_ledger": store.summary(universe.target_session),
                         }),
                         flush=True,
                     )
