@@ -130,6 +130,17 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.assertIn("discord_alert_sent", deploy_script)
         self.assertIn("up -d --no-build --force-recreate", deploy_script)
 
+    def test_yesterday_has_an_independent_post_summary_refresh(self):
+        timer = (ROOT / "deploy/option-sniper-yesterday-refresh.timer").read_text()
+        service = (ROOT / "deploy/option-sniper-yesterday-refresh.service").read_text()
+        refresh = (ROOT / "deploy/refresh-production.sh").read_text()
+        self.assertIn("OnCalendar=Mon..Fri *-*-* 20:20:00 America/New_York", timer)
+        self.assertIn("OnCalendar=Mon..Fri *-*-* 20:40:00 America/New_York", timer)
+        self.assertIn("refresh-production.sh yesterday", service)
+        self.assertIn('cache_name="yesterday-state.json"', refresh)
+        self.assertIn("services=(backend)", refresh)
+        self.assertIn("flock -x 9", refresh)
+
 
 if __name__ == "__main__":
     unittest.main()

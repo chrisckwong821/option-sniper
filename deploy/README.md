@@ -49,14 +49,26 @@ in cache-only mode so deployments and host restarts do not wait for Databento;
 the scheduled refresh service validates and atomically replaces the mounted
 cache.
 
-Successful deployments install `option-sniper-refresh.timer`. It runs at 04:05
-America/New_York Tuesday through Saturday, with a second trigger at 05:00 as a
+Successful deployments install `option-sniper-refresh.timer`. It runs at 03:15
+America/New_York Tuesday through Saturday, with a second trigger at 03:45 as a
 retry. Both triggers follow daylight-saving changes. The job refreshes the
 shared cache in a temporary container while the public adapter continues
 serving, and recreates the adapter only when the cache changed. When the first
 run succeeds, the retry sees the current cache and exits without downloading
 data. A failed Databento refresh leaves the running service and prior cache
 untouched.
+
+`option-sniper-yesterday-refresh.timer` separately runs at 20:20 ET Monday through
+Friday, with a retry at 20:40, after the final EQUS.SUMMARY daily publication.
+These are 08:20/08:40 UTC+8 the following morning during U.S. daylight saving time
+and 09:20/09:40 during standard time. Completion depends on provider availability
+and processing time. It calls `refresh-production.sh yesterday`, writes
+`/var/lib/sigma-tape/yesterday-state.json`, and recreates only the backend. The
+adapter overlays only the saved gainer snapshot when its date is at least as
+recent and its screening policy matches. Today's cached universe and alert cycle
+remain on the original pre-market schedule. Both refresh jobs share an exclusive
+file lock to protect intermediate downloads. Failed refreshes preserve the last
+published cache; retries skip historical downloads after a successful run.
 
 Inspect or manually trigger the refresh with:
 

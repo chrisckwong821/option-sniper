@@ -109,7 +109,8 @@ fi
 healthy=false
 for _ in $(seq 1 180); do
   if curl -fsS http://127.0.0.1:8765/api/health >/dev/null 2>&1 && \
-     curl -fsS http://127.0.0.1:8765/ | grep -q '<title>Option Sniper</title>'; then
+     curl -fsS http://127.0.0.1:8765/ | grep -q '<title>Option Sniper</title>' && \
+     curl -fsS http://127.0.0.1:8765/state-refresh.js | grep -q 'createLoader'; then
     healthy=true
     break
   fi
@@ -130,8 +131,17 @@ sudo install -o root -g root -m 0644 \
 sudo install -o root -g root -m 0644 \
   "$release/deploy/option-sniper-refresh.timer" \
   /etc/systemd/system/option-sniper-refresh.timer
+sudo install -o root -g root -m 0644 \
+  "$release/deploy/option-sniper-yesterday-refresh.service" \
+  /etc/systemd/system/option-sniper-yesterday-refresh.service
+sudo install -o root -g root -m 0644 \
+  "$release/deploy/option-sniper-yesterday-refresh.timer" \
+  /etc/systemd/system/option-sniper-yesterday-refresh.timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now option-sniper-refresh.timer
+sudo systemctl enable option-sniper-yesterday-refresh.timer
+sudo systemctl restart option-sniper-yesterday-refresh.timer
+sudo systemctl list-timers 'option-sniper*refresh.timer' --no-pager
 
 for _ in $(seq 1 12); do
   alerter_state="$(sudo docker inspect --format \

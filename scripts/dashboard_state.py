@@ -247,6 +247,26 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def with_yesterday_snapshot(bundle: dict[str, Any], cache_path: Path | None) -> dict[str, Any]:
+    """Overlay the saved gainer list without changing today's universe or plan."""
+    if cache_path is None:
+        return bundle
+    try:
+        saved = validate_bundle(json.loads(cache_path.read_text()))
+        if (
+            saved.get("screening_policy_fingerprint") != bundle.get("screening_policy_fingerprint")
+            or saved["snapshot"]["data_date"] < bundle["snapshot"]["data_date"]
+        ):
+            return bundle
+        return {
+            **bundle,
+            "snapshot": saved["snapshot"],
+            "yesterday_generated_at_utc": saved.get("generated_at_utc"),
+        }
+    except (OSError, ValueError, TypeError, KeyError):
+        return bundle
+
+
 def fetch_nasdaq_universe(output: Path) -> dict[str, Any]:
     request = urllib.request.Request(
         NASDAQ_SCREENER_URL,

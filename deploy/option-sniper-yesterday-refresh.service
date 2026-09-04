@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh only Option Sniper's Yesterday's Gainers
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/sigma-tape/current/deploy/refresh-production.sh yesterday
+TimeoutStartSec=90min

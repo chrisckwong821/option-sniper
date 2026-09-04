@@ -8,7 +8,8 @@ from aiohttp import WSMsgType
 from aiohttp.client_exceptions import WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
 
-from scripts.dashboard_state import build_mock_bundle
+from scripts.dashboard_state import atomic_write_json, build_mock_bundle, build_refresh_plan
+from scripts.discord_zscore_alert import build_universe
 from scripts.live_price_adapter import STORE_KEY, create_app
 from scripts.websocket_load_test import run as run_websocket_load_test
 from tests.test_dashboard_state import sample_plan
@@ -47,6 +48,11 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(state["snapshot"]["rows"]), 20)
         self.assertEqual(len(state["today"]["rows"]), 30)
         self.assertEqual(state_response.headers["Cache-Control"], "no-store")
+        unchanged = await self.client.get("/api/state", headers={
+            "If-None-Match": state_response.headers["ETag"],
+        })
+        self.assertEqual(unchanged.status, 304)
+        self.assertEqual(await unchanged.read(), b"")
 
         root_response = await self.client.get("/")
         self.assertEqual(root_response.status, 200)
@@ -54,6 +60,7 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Expected &sigma;", root_html)
         self.assertNotIn(">1-day &sigma;<", root_html)
         self.assertEqual((await self.client.get("/app.js")).status, 200)
+        self.assertEqual((await self.client.get("/state-refresh.js")).status, 200)
         self.assertEqual(
             (await self.client.get("/data/snapshot-state.json")).status,
             404,
@@ -69,6 +76,32 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message.json()["type"], "snapshot")
         self.assertEqual(message.json()["schema_version"], "1.2")
         await socket.close()
+
+    async def test_early_gainer_refresh_keeps_today_and_alert_universe(self):
+        original = await (await self.client.get("/api/state")).json()
+        prior_response = await self.client.get("/api/state")
+        saved = build_mock_bundle(build_refresh_plan(datetime(2026, 8, 29, 0, 20, tzinfo=UTC)))
+        saved["snapshot"]["rows"][0]["ticker"] = "NEWGAINER"
+        saved_path = Path(self.tempdir.name) / "yesterday-state.json"
+        atomic_write_json(saved_path, saved)
+        args = argparse.Namespace(**vars(self.args), yesterday_state_cache=saved_path)
+        app = create_app(args, original)
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            response = await client.get("/api/state", headers={
+                "If-None-Match": prior_response.headers["ETag"],
+            })
+            self.assertEqual(response.status, 200)
+            published = await response.json()
+            self.assertEqual(published["snapshot"]["data_date"], "2026-08-28")
+            self.assertEqual(published["today"], original["today"])
+            self.assertEqual(published["refresh_plan"], original["refresh_plan"])
+            self.assertEqual(build_universe(published), build_universe(original))
+            self.assertIn("NEWGAINER", app[STORE_KEY].symbols)
+            self.assertTrue(set(build_universe(original).rows) <= app[STORE_KEY].symbols)
+        finally:
+            await client.close()
 
     async def test_dirty_symbol_delta_is_shared_across_clients(self):
         args = argparse.Namespace(**vars(self.args))

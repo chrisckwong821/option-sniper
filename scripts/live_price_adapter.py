@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import json
 import math
 import os
@@ -28,6 +29,7 @@ try:
         RefreshSettings,
         build_refresh_plan,
         refresh_dashboard_state,
+        with_yesterday_snapshot,
     )
 except ImportError:  # Support direct execution with `python scripts/...`.
     from databento_config import resolve_live_api_key
@@ -37,6 +39,7 @@ except ImportError:  # Support direct execution with `python scripts/...`.
         RefreshSettings,
         build_refresh_plan,
         refresh_dashboard_state,
+        with_yesterday_snapshot,
     )
 
 
@@ -674,6 +677,12 @@ def create_app(
             mock_symbol_count=getattr(args, "mock_symbols", 30),
         )
 
+    state_bundle = with_yesterday_snapshot(
+        state_bundle, getattr(args, "yesterday_state_cache", None),
+    )
+    state_etag = '"' + hashlib.sha256(
+        json.dumps(state_bundle, sort_keys=True).encode()
+    ).hexdigest() + '"'
     snapshot = state_bundle["snapshot"]
     universe = state_bundle["today"]
     symbols = tracked_symbols(snapshot, universe)
@@ -733,8 +742,11 @@ def create_app(
         payload["stream"] = store.stream_metrics()
         return web.json_response(payload)
 
-    async def state_handler(_: web.Request) -> web.Response:
-        return web.json_response(state_bundle, headers={"Cache-Control": "no-store"})
+    async def state_handler(request: web.Request) -> web.Response:
+        headers = {"Cache-Control": "no-store", "ETag": state_etag}
+        if request.headers.get("If-None-Match") == state_etag:
+            return web.Response(status=304, headers=headers)
+        return web.json_response(state_bundle, headers=headers)
 
     async def index_handler(_: web.Request) -> web.FileResponse:
         return web.FileResponse(args.dashboard / "index.html")
@@ -797,7 +809,7 @@ def create_app(
     app.router.add_get("/ws/prices", websocket_handler)
     app.router.add_get("/api/health", health_handler)
     app.router.add_get("/api/state", state_handler)
-    for asset in ("app.js", "live-calculations.js", "styles.css"):
+    for asset in ("app.js", "live-calculations.js", "state-refresh.js", "styles.css"):
         async def asset_handler(
             _: web.Request,
             asset_path: Path = args.dashboard / asset,
@@ -814,6 +826,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--dashboard", type=Path, default=DEFAULT_DASHBOARD)
     parser.add_argument("--state-cache", type=Path, default=DEFAULT_STATE_CACHE)
+    parser.add_argument(
+        "--yesterday-state-cache", type=Path,
+        default=DEFAULT_STATE_CACHE.with_name("yesterday-state.json"),
+    )
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     parser.add_argument("--day-dataset", default="EQUS.MINI")
     parser.add_argument("--overnight-dataset", default="OCEA.MEMOIR")

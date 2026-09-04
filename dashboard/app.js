@@ -27,6 +27,7 @@ const state = {
     marketSession: "snapshot",
     pricesReceived: 0,
     sequence: null,
+    points: new Map(),
   },
   renderQueued: false,
 };
@@ -723,10 +724,10 @@ function handlePriceMessage(message) {
     state.viewSettings.today.page = 1;
   }
   state.live.dataDate = message.trading_date || state.live.dataDate;
-  const changed = message.prices.reduce(
-    (count, point) => count + Number(applyLivePrice(point, message.trading_date)),
-    0,
-  );
+  const changed = message.prices.reduce((count, point) => {
+    state.live.points.set(point.ticker, point);
+    return count + Number(applyLivePrice(point, message.trading_date));
+  }, 0);
   state.live.pricesReceived = [...state.rowsByTicker.values()]
     .filter((rows) => rows.some((row) => row.price_source))
     .length;
@@ -760,6 +761,7 @@ function connectLivePrices() {
     state.live.lastMessageAt = Date.now();
     state.live.sequence = null;
     setConnectionState("connecting", "Syncing");
+    refreshDashboardState().catch(() => {});
   });
   socket.addEventListener("message", (event) => {
     try {
@@ -842,8 +844,15 @@ elements.todayPagination.addEventListener("click", (event) => {
 });
 
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && !state.live.connected) connectLivePrices();
+  if (document.visibilityState === "visible") {
+    refreshDashboardState().catch(() => {});
+    if (!state.live.connected) connectLivePrices();
+  }
 });
+
+window.setInterval(() => {
+  if (document.visibilityState === "visible") refreshDashboardState().catch(() => {});
+}, 60000);
 
 window.setInterval(() => {
   if (state.live.connected && Date.now() - state.live.lastMessageAt > 15000) {
@@ -886,33 +895,53 @@ function initializeRows(payload, view) {
       row.price_session = "snapshot";
       row.price_trading_date = payload.data_date;
       row.price_stale = false;
-      const trackedRows = state.rowsByTicker.get(row.ticker) || [];
-      trackedRows.push(row);
-      state.rowsByTicker.set(row.ticker, trackedRows);
   });
 }
 
-fetch(`/api/state?t=${Date.now()}`, { cache: "no-store" })
-  .then((response) => {
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return response.json();
-  })
-  .then((bundle) => {
-    const payload = bundle.snapshot;
-    const todayPayload = bundle.today;
-    if (!payload?.rows || !todayPayload?.rows) throw new Error("Invalid state payload");
-    state.payload = payload;
-    state.todayPayload = todayPayload;
-    state.cache = bundle.cache || null;
-    initializeRows(payload, "yesterday");
-    initializeRows(todayPayload, "today");
-    populateSectors(activePayload().rows);
-    render();
-    if (state.cache?.status === "stale") {
-      setConnectionState("stale", "Stale snapshot");
+function applyDashboardState(bundle, changed) {
+  const initial = !state.payload;
+  state.cache = bundle.cache || null;
+  if (changed.yesterday) {
+    state.payload = bundle.snapshot;
+    initializeRows(state.payload, "yesterday");
+  }
+  if (changed.today) {
+    state.todayPayload = bundle.today;
+    initializeRows(state.todayPayload, "today");
+  }
+  state.rowsByTicker.clear();
+  allRows().forEach((row) => {
+    const trackedRows = state.rowsByTicker.get(row.ticker) || [];
+    trackedRows.push(row);
+    state.rowsByTicker.set(row.ticker, trackedRows);
+  });
+  // A WebSocket snapshot may arrive before the new saved list finishes loading.
+  for (const row of allRows()) {
+    if (!changed[row.dashboard_view]) continue;
+    const point = state.live.points.get(row.ticker);
+    if (point && window.SigmaMath.isPriceForTradingDate(point.trading_date, state.live.dataDate)) {
+      applyLivePriceToRow(row, point);
     }
-    connectLivePrices();
-  })
+  }
+  if (changed[state.view]) {
+    populateSectors(activePayload().rows);
+    if (state.sector !== "all" && !activePayload().rows.some((row) => row.sector === state.sector)) {
+      state.sector = "all";
+    }
+    elements.sector.value = state.sector;
+  }
+  render();
+  if (initial && state.cache?.status === "stale") {
+    setConnectionState("stale", "Stale snapshot");
+  }
+  if (initial) connectLivePrices();
+}
+
+const refreshDashboardState = window.SigmaStateRefresh.createLoader(
+  (...args) => fetch(...args), applyDashboardState,
+);
+
+refreshDashboardState()
   .catch(() => {
     Object.values(elements.tables).forEach((table) => {
       table.empty.hidden = false;

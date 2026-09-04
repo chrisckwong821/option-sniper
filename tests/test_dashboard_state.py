@@ -15,6 +15,7 @@ from scripts.dashboard_state import (
     screening_policy_fingerprint,
     validate_bundle,
     validate_expiry_horizon,
+    with_yesterday_snapshot,
 )
 
 
@@ -82,6 +83,45 @@ class DashboardStateManagerTests(unittest.TestCase):
 
     def tearDown(self):
         self.tempdir.cleanup()
+
+    def test_yesterday_overlay_preserves_today_plan_and_main_cache(self):
+        original = build_mock_bundle(self.plan)
+        atomic_write_json(self.cache, original)
+        before = self.cache.read_bytes()
+        saved = build_mock_bundle(build_refresh_plan(datetime(2026, 8, 29, 0, 20, tzinfo=UTC)))
+        saved_path = self.cache.with_name("yesterday-state.json")
+        atomic_write_json(saved_path, saved)
+
+        published = with_yesterday_snapshot(original, saved_path)
+
+        self.assertEqual(published["snapshot"]["data_date"], "2026-08-28")
+        self.assertIs(published["today"], original["today"])
+        self.assertIs(published["refresh_plan"], original["refresh_plan"])
+        self.assertEqual(self.cache.read_bytes(), before)
+        self.assertEqual(original["snapshot"]["data_date"], "2026-08-27")
+
+    def test_yesterday_overlay_ignores_bad_old_or_wrong_policy_cache(self):
+        original = build_mock_bundle(self.plan)
+        self.assertIs(with_yesterday_snapshot(original, None), original)
+        self.assertIs(with_yesterday_snapshot(original, self.cache), original)
+        self.cache.write_text("broken")
+        self.assertIs(with_yesterday_snapshot(original, self.cache), original)
+        old = build_mock_bundle(sample_plan("2026-08-26"))
+        atomic_write_json(self.cache, old)
+        self.assertIs(with_yesterday_snapshot(original, self.cache), original)
+        old["snapshot"]["data_date"] = "2026-08-28"
+        old["screening_policy_fingerprint"] = "old-policy"
+        atomic_write_json(self.cache, old)
+        self.assertIs(with_yesterday_snapshot(original, self.cache), original)
+
+    def test_premarket_refresh_does_not_replace_same_day_saved_gainer_list(self):
+        original = build_mock_bundle(self.plan)
+        saved = build_mock_bundle(self.plan)
+        saved["snapshot"]["rows"][0]["ticker"] = "SAVED"
+        atomic_write_json(self.cache, saved)
+        published = with_yesterday_snapshot(original, self.cache)
+        self.assertEqual(published["snapshot"]["rows"][0]["ticker"], "SAVED")
+        self.assertIs(published["today"], original["today"])
 
     def test_fresh_cache_is_reused_without_refresh(self):
         atomic_write_json(self.cache, build_mock_bundle(self.plan))

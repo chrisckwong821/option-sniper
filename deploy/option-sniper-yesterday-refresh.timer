@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh Yesterday's Gainers after the final daily market summary
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 20:20:00 America/New_York
+OnCalendar=Mon..Fri *-*-* 20:40:00 America/New_York
+Persistent=true
+RandomizedDelaySec=30
+Unit=option-sniper-yesterday-refresh.service
+
+[Install]
+WantedBy=timers.target

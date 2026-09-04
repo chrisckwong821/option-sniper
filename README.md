@@ -99,6 +99,18 @@ live table to its new anchor before pre-market only after a valid cache is writt
 It performs no Databento download when the cache already covers the latest
 completed session and current screening policy.
 
+Yesterday's Gainers has a separate `option-sniper-yesterday-refresh.timer` at
+20:20 America/New_York Monday through Friday, with a retry at 20:40. That is
+08:20/08:40 UTC+8 the following morning during U.S. daylight saving time and
+09:20/09:40 in standard time, plus processing time. This follows the final
+EQUS.SUMMARY daily bar published around 20:15 ET. The job writes
+`yesterday-state.json`; the adapter uses only its saved gainer list, preserving
+today's universe, anchors, and alert cycle in `dashboard-state.json`. It restarts
+only the adapter to subscribe to the updated ticker list; live clients reconnect
+automatically. The existing pre-market refresh and Discord logic are unchanged.
+Open dashboards check for new lists every minute, on reconnect, and when returning
+to the tab. An unchanged Today view retains its existing live rows and filters.
+
 ## Discord +1 sigma alerts
 
 Production includes a small alert worker that consumes the backend WebSocket;

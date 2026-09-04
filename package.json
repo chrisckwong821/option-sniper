@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "test": "node tests/live-calculations.test.js"
+    "test": "node tests/live-calculations.test.js && node --test tests/state-refresh.test.js"
   },
   "engines": {
     "node": ">=22"

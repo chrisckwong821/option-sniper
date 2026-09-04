@@ -3,6 +3,20 @@ set -Eeuo pipefail
 
 current_link="/opt/sigma-tape/current"
 state_cache="/var/lib/sigma-tape/dashboard-state.json"
+cache_name="dashboard-state.json"
+services=()
+case "${1:-all}" in
+  all) ;;
+  yesterday)
+    cache_name="yesterday-state.json"
+    state_cache="/var/lib/sigma-tape/$cache_name"
+    services=(backend)
+    ;;
+  *) echo "Unknown refresh scope" >&2; exit 2 ;;
+esac
+# The two jobs share intermediate downloads, but never their published cache.
+exec 9>/var/lib/sigma-tape/refresh.lock
+flock -x 9
 release="$(readlink -f "$current_link")"
 
 if [[ -z "$release" || ! -d "$release" ]]; then
@@ -19,7 +33,8 @@ fi
 cd "$release"
 env SIGMA_TAPE_VERSION="$revision" \
   docker compose -f deploy/compose.yml run --rm --no-deps \
-  --entrypoint python backend -m scripts.refresh_dashboard_cache
+  --entrypoint python backend -m scripts.refresh_dashboard_cache \
+  --state-cache "/app/.cache/sigma-tape/$cache_name"
 
 after="$(sha256sum "$state_cache" | awk '{print $1}')"
 if [[ "$before" == "$after" ]]; then
@@ -28,7 +43,7 @@ if [[ "$before" == "$after" ]]; then
 fi
 
 env SIGMA_TAPE_VERSION="$revision" \
-  docker compose -f deploy/compose.yml up -d --no-build --force-recreate
+  docker compose -f deploy/compose.yml up -d --no-build --force-recreate "${services[@]}"
 
 for _ in $(seq 1 60); do
   if curl -fsS http://127.0.0.1:8765/api/health >/dev/null 2>&1; then
