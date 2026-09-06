@@ -261,6 +261,9 @@ function visibleRows(view = state.view) {
       return true;
     })
     .sort((a, b) => {
+      if (view === "yesterday") {
+        return Number(a.original_rank) - Number(b.original_rank);
+      }
       if (view === "today") {
         const premarketPriority = window.SigmaMath.premarketTradePriority(
           b,
@@ -429,6 +432,7 @@ function rowMarkup(row, viewRank) {
 }
 
 function sortLabel(view = state.view) {
+  if (view === "yesterday") return "saved previous-session rank";
   const settings = state.viewSettings[view];
   const labels = {
     original_rank: "saved rank",
@@ -497,7 +501,7 @@ function renderTable(view) {
 
   table.rows.innerHTML = rows.map((row, index) => rowMarkup(
     row,
-    view === "yesterday" && settings.sortKey === "original_rank"
+    view === "yesterday"
       ? row.original_rank
       : pagination.offset + index + 1,
   )).join("");
@@ -511,7 +515,7 @@ function renderTable(view) {
       : observedRows > 0
       ? `${observedRows} of ${payload.rows.length} current-session prices · ranked by ${sortLabel(view)}`
       : `No current-session prices yet · showing ${formatDate(payload.data_date)} closing snapshot · ranked by ${sortLabel(view)}`
-    : `Fixed 20-name list · ranked by ${sortLabel(view)}`;
+    : `Fixed 20-name list · fixed in ${sortLabel(view)} order`;
   table.horizonLine.textContent = expectedSigmaNote(payload);
   if (view === "today") {
     elements.todayPagination.hidden = pagination.totalPages <= 1;
@@ -551,9 +555,6 @@ function render() {
     ? `Today's return anchor: ${formatDate(payload.anchor_date)} close`
     : `Saved screen anchor: ${formatDate(payload.anchor_date)} close`;
   elements.ivNote.textContent = `${expectedSigmaNote(payload)} · Expiry ${formatDate(payload.option_expiry)}`;
-  elements.absoluteRank.hidden = state.view !== "today";
-  elements.savedRank.hidden = state.view !== "yesterday";
-
   document.querySelectorAll(".sort-button").forEach((button) => {
     const buttonView = button.closest(".table-panel")?.id === "panel-today" ? "today" : "yesterday";
     const settings = state.viewSettings[buttonView];
@@ -561,6 +562,9 @@ function render() {
     button.dataset.direction = button.dataset.sort === settings.sortKey ? settings.sortDirection : "";
   });
   document.querySelectorAll(".rank-button").forEach((button) => {
+    button.hidden = button.dataset.sort === "original_rank"
+      ? state.view !== "yesterday"
+      : state.view !== "today";
     button.classList.toggle("active", button.dataset.sort === activeSettings().sortKey);
   });
   document.querySelectorAll(".view-button").forEach((button) => {
@@ -586,6 +590,7 @@ function queueRender() {
 }
 
 function setSort(sortKey) {
+  if (state.view === "yesterday") return;
   const settings = activeSettings();
   if (settings.sortKey === sortKey) {
     settings.sortDirection = settings.sortDirection === "desc" ? "asc" : "desc";

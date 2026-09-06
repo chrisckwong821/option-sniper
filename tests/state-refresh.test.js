@@ -103,6 +103,29 @@ test("the open dashboard replaces yesterday rows while preserving today's object
   vm.runInContext("render = () => {};", context);
   await vm.runInContext("refreshDashboardState()", context);
   vm.runInContext(`
+    state.payload.rows = [
+      { ticker: "SECOND", company_name: "Second", sector: "Technology",
+        iv_reliability: "high", original_rank: 2, gain_pct: 50, z_score: 9 },
+      { ticker: "FIRST", company_name: "First", sector: "Technology",
+        iv_reliability: "high", original_rank: 1, gain_pct: -5, z_score: -2 },
+    ];
+    state.view = "yesterday";
+    setSort("gain_pct");
+  `, context);
+  assert.equal(
+    vm.runInContext("state.viewSettings.yesterday.sortKey", context),
+    "original_rank",
+  );
+  assert.equal(
+    vm.runInContext("visibleRows('yesterday').map((row) => row.ticker).join(',')", context),
+    "FIRST,SECOND",
+  );
+  vm.runInContext("state.view = 'today'; setSort('gain_pct');", context);
+  assert.equal(
+    vm.runInContext("state.viewSettings.today.sortKey", context),
+    "gain_pct",
+  );
+  vm.runInContext(`
     state.view = "today";
     state.search = "live";
     state.sector = "Technology";
