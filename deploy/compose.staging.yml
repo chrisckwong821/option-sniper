@@ -1,0 +1,35 @@
+name: sigma-tape-staging
+
+services:
+  backend:
+    image: sigma-tape-staging:${SIGMA_TAPE_VERSION:-local}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: sigma-tape-staging
+    restart: unless-stopped
+    init: true
+    env_file:
+      - /etc/sigma-tape/sigma-tape-staging.env
+    environment:
+      SIGMA_ALLOWED_ORIGINS: https://staging.optionsniper.xyz
+    ports:
+      - "127.0.0.1:8766:8765"
+    volumes:
+      - /var/lib/sigma-tape-staging:/app/.cache/sigma-tape
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1536m
+    cpus: 1.5
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

@@ -1,0 +1,104 @@
+name: Deploy staging
+
+on:
+  push:
+    branches: [codex/staging]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: option-sniper-staging
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e '.[test]'
+      - name: Compile Python
+        run: python -m compileall -q scripts tests
+      - name: Run Python tests with branch coverage
+        run: make coverage
+      - name: Run frontend tests
+        run: make test-js
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: staging
+      url: https://staging.optionsniper.xyz
+    env:
+      DEPLOY_HOST: ${{ secrets.EC2_HOST }}
+      DEPLOY_USER: ${{ secrets.EC2_USER }}
+      DEPLOY_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure trusted SSH access
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+        run: |
+          key_path="$RUNNER_TEMP/option-sniper-staging-ssh-key"
+          known_hosts="$RUNNER_TEMP/option-sniper-staging-known-hosts"
+          install -m 0700 -d "$HOME/.ssh"
+          printf '%s\n' "$EC2_SSH_KEY" > "$key_path"
+          printf '%s\n' "$EC2_KNOWN_HOSTS" > "$known_hosts"
+          chmod 0600 "$key_path" "$known_hosts"
+          ssh-keygen -y -f "$key_path" >/dev/null
+
+      - name: Package tested revision
+        run: |
+          revision="${DEPLOY_SHA:0:8}"
+          archive="option-sniper-staging-${revision}.tar.gz"
+          git archive --format=tar.gz --output="$RUNNER_TEMP/$archive" "$DEPLOY_SHA"
+          checksum=$(sha256sum "$RUNNER_TEMP/$archive" | awk '{print $1}')
+          printf 'REVISION=%s\nARCHIVE=%s\nARCHIVE_SHA256=%s\n' \
+            "$revision" "$archive" "$checksum" >> "$GITHUB_ENV"
+
+      - name: Upload and deploy isolated staging release
+        run: |
+          key_path="$RUNNER_TEMP/option-sniper-staging-ssh-key"
+          known_hosts="$RUNNER_TEMP/option-sniper-staging-known-hosts"
+          ssh_options=(
+            -i "$key_path"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o "UserKnownHostsFile=$known_hosts"
+            -o ConnectTimeout=15
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=4
+          )
+          scp "${ssh_options[@]}" \
+            "$RUNNER_TEMP/$ARCHIVE" \
+            "$DEPLOY_USER@$DEPLOY_HOST:/tmp/$ARCHIVE"
+          ssh "${ssh_options[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "bash -s -- '$REVISION' '$ARCHIVE_SHA256'" \
+            < deploy/ec2-deploy-staging.sh
+
+      - name: Verify public staging endpoint
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -fsS https://staging.optionsniper.xyz/api/health >/dev/null && \
+               curl -fsS https://staging.optionsniper.xyz/ | grep -q '<title>Option Sniper</title>'; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Public staging endpoint did not become healthy" >&2
+          exit 1
