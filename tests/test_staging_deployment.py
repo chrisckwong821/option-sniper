@@ -21,6 +21,7 @@ class StagingDeploymentTests(unittest.TestCase):
 
         self.assertIn('release_root="/opt/sigma-tape-staging/releases"', deployer)
         self.assertIn('staging_cache="/var/lib/sigma-tape-staging"', deployer)
+        self.assertIn('sudo test -f "$production_cache/$cache_name"', deployer)
         self.assertIn("http://127.0.0.1:8766/api/health", deployer)
         self.assertNotIn("docker compose -f deploy/compose.yml", deployer)
         self.assertNotIn("systemctl", deployer)

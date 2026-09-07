@@ -67,7 +67,8 @@ for cache_name in \
   live-prices.json \
   live-iv-expansion.json \
   option-contracts.json; do
-  if [[ ! -e "$staging_cache/$cache_name" && -f "$production_cache/$cache_name" ]]; then
+  if ! sudo test -e "$staging_cache/$cache_name" && \
+     sudo test -f "$production_cache/$cache_name"; then
     sudo install -o 10001 -g 10001 -m 0640 \
       "$production_cache/$cache_name" "$staging_cache/$cache_name"
   fi
