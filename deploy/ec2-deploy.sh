@@ -81,96 +81,15 @@ if [[ ! -f "$release/.release-revision" ]] || \
 fi
 sudo chmod 0755 "$release"
 
-rollback() {
-  if [[ -z "$previous" || ! -d "$previous" || "$previous" == "$release" ]]; then
-    echo "No prior release is available for rollback" >&2
-    return
-  fi
-  previous_revision="$(basename "$previous")"
-  echo "Rolling back to $previous_revision" >&2
-  (
-    cd "$previous"
-    sudo env SIGMA_TAPE_VERSION="$previous_revision" \
-      docker compose -f deploy/compose.yml up -d --no-build
-  )
-  sudo ln -sfn "$previous" "$current_link"
-}
-
 cd "$release"
 sudo env SIGMA_TAPE_VERSION="$revision" \
   docker compose -f deploy/compose.yml build
 
-if ! sudo env SIGMA_TAPE_VERSION="$revision" \
-  docker compose -f deploy/compose.yml up -d --no-build --force-recreate; then
-  rollback
-  exit 1
-fi
-
-healthy=false
-for _ in $(seq 1 180); do
-  if curl -fsS http://127.0.0.1:8765/api/health >/dev/null 2>&1 && \
-     curl -fsS http://127.0.0.1:8765/ | grep -q '<title>Option Sniper</title>' && \
-     curl -fsS http://127.0.0.1:8765/state-refresh.js | grep -q 'createLoader'; then
-    healthy=true
-    break
-  fi
-  sleep 5
-done
-
-if [[ "$healthy" != true ]]; then
-  echo "Option Sniper failed its production health check" >&2
-  sudo docker logs --tail 100 sigma-tape 2>&1 || true
-  rollback
-  exit 1
-fi
-
-sudo ln -sfn "$release" "$current_link"
-sudo install -o root -g root -m 0644 \
-  "$release/deploy/option-sniper-refresh.service" \
-  /etc/systemd/system/option-sniper-refresh.service
-sudo install -o root -g root -m 0644 \
-  "$release/deploy/option-sniper-refresh.timer" \
-  /etc/systemd/system/option-sniper-refresh.timer
-sudo install -o root -g root -m 0644 \
-  "$release/deploy/option-sniper-yesterday-refresh.service" \
-  /etc/systemd/system/option-sniper-yesterday-refresh.service
-sudo install -o root -g root -m 0644 \
-  "$release/deploy/option-sniper-yesterday-refresh.timer" \
-  /etc/systemd/system/option-sniper-yesterday-refresh.timer
-sudo systemctl daemon-reload
-sudo install -m 0644 "$release/deploy/option-sniper-reopening-refresh.service" /etc/systemd/system/option-sniper-reopening-refresh.service
-sudo install -m 0644 "$release/deploy/option-sniper-reopening-refresh.timer" /etc/systemd/system/option-sniper-reopening-refresh.timer
-sudo systemctl daemon-reload
-sudo systemctl enable option-sniper-reopening-refresh.timer
-sudo systemctl restart option-sniper-reopening-refresh.timer
-sudo systemctl enable --now option-sniper-refresh.timer
-sudo systemctl enable option-sniper-yesterday-refresh.timer
-sudo systemctl restart option-sniper-yesterday-refresh.timer
-sudo systemctl list-timers 'option-sniper*refresh.timer' --no-pager
-
-for _ in $(seq 1 12); do
-  alerter_state="$(sudo docker inspect --format \
-    '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' \
-    sigma-tape-alerter 2>/dev/null || true)"
-  if [[ "$alerter_state" == "running healthy" ]] || \
-     [[ "$alerter_state" != running* ]]; then
-    break
-  fi
-  sleep 5
-done
-
+# Fail-closed semantic checks, including the alerter, and code/cache rollback.
+sudo bash "$release/deploy/guarded-activate.sh" production "$revision"
 sudo docker inspect --format \
   'deployed image={{.Config.Image}} status={{.State.Status}} health={{.State.Health.Status}} restarts={{.RestartCount}}' \
   sigma-tape
 sudo docker inspect --format \
   'alerter image={{.Config.Image}} status={{.State.Status}} health={{.State.Health.Status}} restarts={{.RestartCount}}' \
   sigma-tape-alerter
-if [[ "$alerter_state" != "running healthy" ]]; then
-  echo "Discord alerter did not become healthy; safe diagnostic output follows" >&2
-  sudo docker logs --tail 20 sigma-tape-alerter >&2 || true
-else
-  sleep 30
-  sudo docker logs --since 5m sigma-tape-alerter 2>&1 \
-    | grep -E '"event": "(alert_stream_connecting|discord_alert_sent|discord_alert_uncertain|discord_alert_released)"' \
-    | tail -n 100 || true
-fi

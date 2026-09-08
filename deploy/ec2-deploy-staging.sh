@@ -96,50 +96,13 @@ if [[ ! -f "$release/.release-revision" ]] || \
 fi
 sudo chmod 0755 "$release"
 
-rollback() {
-  if [[ -z "$previous" || ! -d "$previous" || "$previous" == "$release" ]]; then
-    echo "No prior staging release is available for rollback" >&2
-    return
-  fi
-  previous_revision="$(basename "$previous")"
-  echo "Rolling staging back to $previous_revision" >&2
-  (
-    cd "$previous"
-    sudo env SIGMA_TAPE_VERSION="$previous_revision" \
-      docker compose -f deploy/compose.staging.yml up -d --no-build
-  )
-  sudo ln -sfn "$previous" "$current_link"
-}
-
 cd "$release"
 sudo env SIGMA_TAPE_VERSION="$revision" \
   docker compose -f deploy/compose.staging.yml build
 
-if ! sudo env SIGMA_TAPE_VERSION="$revision" \
-  docker compose -f deploy/compose.staging.yml up -d --no-build --force-recreate; then
-  rollback
-  exit 1
-fi
-
-healthy=false
-for _ in $(seq 1 180); do
-  if curl -fsS http://127.0.0.1:8766/api/health >/dev/null 2>&1 && \
-     curl -fsS http://127.0.0.1:8766/ | grep -q '<title>Option Sniper</title>' && \
-     curl -fsS http://127.0.0.1:8766/state-refresh.js | grep -q 'createLoader'; then
-    healthy=true
-    break
-  fi
-  sleep 5
-done
-
-if [[ "$healthy" != true ]]; then
-  echo "Option Sniper failed its staging health check" >&2
-  sudo docker logs --tail 100 sigma-tape-staging 2>&1 || true
-  rollback
-  exit 1
-fi
-
-sudo ln -sfn "$release" "$current_link"
+# Semantic readiness and code/cache rollback are shared with production.
+sudo bash "$release/deploy/guarded-activate.sh" staging "$revision"
+curl -fsS --max-time 10 http://127.0.0.1:8766/api/health >/dev/null
 sudo docker inspect --format \
   'staging image={{.Config.Image}} status={{.State.Status}} health={{.State.Health.Status}} restarts={{.RestartCount}}' \
   sigma-tape-staging

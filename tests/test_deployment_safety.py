@@ -1,0 +1,128 @@
+import copy
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import sqlite3
+import tempfile
+import unittest
+from scripts.deployment_cache import backup, restore
+from scripts.deployment_health import check
+
+
+NOW = datetime(2026, 9, 8, 14, 0, tzinfo=timezone.utc)
+
+
+def healthy(now=NOW):
+    return {'server_time': now.isoformat(), 'market_session': 'regular',
+            'dashboard_state': {'status': 'fresh', 'data_date': '2026-09-04'},
+            'calibration': {'active_version': 'validated', 'active_date': '2026-09-04'},
+            'iv_expansion': {'reference_symbols': 416, 'calculated_symbols': 400, 'reference_date': '2026-09-04'},
+            'feeds': {name: {'state': 'live', 'last_record_at': now.isoformat()}
+                      for name in ['EQUS.MINI', 'OPRA.PILLAR']},
+            'iv_expansions': [{'last_valid_at': now.isoformat()}]}
+
+
+class HealthTests(unittest.TestCase):
+    def test_healthy_and_overnight_warning(self):
+        payload = healthy()
+        payload['feeds']['OCEA.MEMOIR'] = {'state': 'retrying'}
+        self.assertEqual(check(payload, NOW), [])
+
+    def test_rejects_missing_stale_or_incompatible_state(self):
+        changes = [('server_time', None), ('calibration', {}), ('iv_expansions', []),
+                   ('feeds', {}), ('dashboard_state', {'status': 'stale'}),
+                   ('iv_expansion', {})]
+        for name, value in changes:
+            with self.subTest(field=name):
+                payload = healthy()
+                payload[name] = value
+                self.assertTrue(check(payload, NOW))
+        payload = healthy()
+        payload['calibration']['active_date'] = '2026-09-03'
+        self.assertTrue(check(payload, NOW))
+
+    def test_checks_stale_quotes_even_if_backend_says_closed(self):
+        payload = healthy()
+        payload['market_session'] = 'closed'
+        payload['feeds']['OPRA.PILLAR']['last_record_at'] = '2026-09-08T13:00:00+00:00'
+        self.assertTrue(check(payload, NOW))
+
+    def test_no_freshness_requirement_on_holidays_or_after_early_close(self):
+        for now in [datetime(2026, 9, 7, 14, tzinfo=timezone.utc),
+                    datetime(2026, 11, 27, 19, tzinfo=timezone.utc)]:
+            payload = healthy(now)
+            payload['feeds'] = {}
+            payload['iv_expansions'] = []
+            self.assertEqual(check(payload, now), [])
+
+    def test_reference_date_not_yesterday_panel_date(self):
+        payload = healthy()
+        payload['dashboard_state']['data_date'] = '2026-09-08'
+        self.assertEqual(check(payload, NOW), [])
+
+
+class CacheRollbackTests(unittest.TestCase):
+    def test_restore_old_cache_without_reverting_new_discord_alerts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, saved = Path(directory) / 'cache', Path(directory) / 'snapshot'
+            root.mkdir()
+            (root / 'dashboard-state.json').write_text('{"old": true}')
+            with sqlite3.connect(root / 'discord-alerts.sqlite3') as db:
+                db.execute('CREATE TABLE alerts (ticker TEXT)')
+                db.execute("INSERT INTO alerts VALUES ('AAA')")
+            backup(root, saved)
+            (root / 'dashboard-state.json').write_text('{"candidate": true}')
+            (root / 'iv-expansion-statistics-session-batch.json').write_text('{}')
+            with sqlite3.connect(root / 'discord-alerts.sqlite3') as db:
+                db.execute("INSERT INTO alerts VALUES ('BBB')")
+            restore(root, saved)
+            self.assertEqual(json.loads((root / 'dashboard-state.json').read_text()), {'old': True})
+            self.assertFalse((root / 'iv-expansion-statistics-session-batch.json').exists())
+            with sqlite3.connect(root / 'discord-alerts.sqlite3') as db:
+                self.assertEqual(db.execute('SELECT ticker FROM alerts').fetchall(), [('AAA',), ('BBB',)])
+
+    def test_rejects_tampering_before_touching_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, saved = Path(directory) / 'cache', Path(directory) / 'snapshot'
+            root.mkdir()
+            (root / 'dashboard-state.json').write_text('old')
+            backup(root, saved)
+            (root / 'dashboard-state.json').write_text('new')
+            (saved / 'dashboard-state.json').write_text('damaged')
+            with self.assertRaises(ValueError):
+                restore(root, saved)
+            self.assertEqual((root / 'dashboard-state.json').read_text(), 'new')
+
+    def test_sqlite_wal_checkpoint_and_restore(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, saved = Path(directory) / 'cache', Path(directory) / 'snapshot'
+            root.mkdir()
+            name = 'iv-expansion-history-session-batch.sqlite3'
+            with sqlite3.connect(root / name) as db:
+                db.execute('PRAGMA journal_mode=WAL')
+                db.execute('CREATE TABLE observations (value INTEGER)')
+                db.execute('INSERT INTO observations VALUES (1)')
+                db.commit()
+                backup(root, saved)
+            with sqlite3.connect(root / name) as db:
+                db.execute('INSERT INTO observations VALUES (2)')
+            restore(root, saved)
+            with sqlite3.connect(root / name) as db:
+                self.assertEqual(db.execute('SELECT * FROM observations').fetchall(), [(1,)])
+
+    def test_rejects_overlapping_cache_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(ValueError):
+                backup(Path(directory), Path(directory) / 'child')
+
+
+class ActivationWiringTests(unittest.TestCase):
+    def test_both_lanes_use_same_guard(self):
+        root = Path(__file__).resolve().parents[1]
+        for name, environment in [('ec2-deploy.sh', 'production'), ('ec2-deploy-staging.sh', 'staging')]:
+            self.assertIn('guarded-activate.sh" ' + environment, (root / 'deploy' / name).read_text())
+        guard = (root / 'deploy/guarded-activate.sh').read_text()
+        self.assertIn('flock -x 9', guard)
+        self.assertIn('restore_timers', guard)
+        self.assertIn('"$environment" == staging &&', guard)
+        self.assertIn('scripts.deployment_health', guard)

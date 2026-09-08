@@ -1086,6 +1086,7 @@ def create_app(
         payload["iv_universe_symbols"] = len(universe["rows"])
         payload["cached_symbols"] = len(store.prices)
         payload["iv_expansion"] = {
+            "reference_date": iv_tracker.anchor_date,
             "reference_symbols": len(iv_tracker.references),
             "subscribed_contracts": len(
                 option_runtime["feed"].symbols
