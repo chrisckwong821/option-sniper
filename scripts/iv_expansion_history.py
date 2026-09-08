@@ -740,8 +740,8 @@ class DownloadLedger:
         retry_base_seconds: float = 2.0,
         prior_cost: float = 0.0,
     ) -> None:
-        if max_cost <= 0:
-            raise ValueError("max_cost must be positive")
+        if max_cost < 0:
+            raise ValueError("max_cost must be nonnegative")
         if prior_cost < 0 or prior_cost > max_cost:
             raise ValueError("prior_cost must be between zero and max_cost")
         if max_retries < 0:
@@ -1163,6 +1163,11 @@ def _contracts_for_session(
     full_path = ledger._path("definitions", full_request)
     # Keep existing all-universe caches. New catalogues use bounded parent
     # groups because OPRA's gateway can time out on a 416-parent response.
+    # Recover the original request shape before deciding to split it. Otherwise
+    # a missing local all-universe catalogue becomes different parent requests
+    # that cannot reuse the already archived S3 catalogue.
+    if not full_path.exists() and ledger.shared.enabled:
+        ledger.shared.restore_file(full_path)
     groups = [list(rows)] if full_path.exists() else chunked(rows, 100)
     contracts = {}
     for group in groups:

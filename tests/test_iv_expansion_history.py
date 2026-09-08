@@ -40,6 +40,33 @@ from scripts.iv_expansion_history import (
 
 
 class IvExpansionHistoryTests(unittest.TestCase):
+    def test_missing_full_catalogue_is_restored_before_request_partitioning(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as directory:
+            rows = [{"ticker": f"T{i}"} for i in range(101)]
+            ledger = Mock()
+            path = Path(directory) / "full.dbn.zst"
+            ledger._path.return_value = path
+            ledger.shared.enabled = True
+            ledger.shared.restore_file.side_effect = lambda p: p.touch()
+            ledger.fetch_frame.return_value = pd.DataFrame()
+            result = _contracts_for_session(Mock(), ledger, rows, date(2026, 8, 28), observation_session=date(2026, 8, 31))
+            self.assertEqual(result, {})
+            ledger.shared.restore_file.assert_called_once_with(path)
+            ledger.fetch_frame.assert_called_once()
+            self.assertEqual(len(ledger.fetch_frame.call_args.args[2]["symbols"]), 101)
+
+    def test_zero_budget_blocks_a_paid_request(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = DownloadLedger(Path(directory), 0)
+            client = Mock()
+            client.metadata.get_cost.return_value = 0.01
+            with self.assertRaises(RuntimeError):
+                ledger.fetch_frame(client, "spot", _spot_request([{"ticker": "A"}], date(2026, 9, 4)))
+            client.timeseries.get_range.assert_not_called()
+            self.assertEqual(ledger.downloaded_requests, 0)
+
     def test_unresolved_historical_symbols_are_empty_but_auth_errors_propagate(self):
         from databento.common.error import BentoClientError
         from unittest.mock import Mock
