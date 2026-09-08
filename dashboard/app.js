@@ -641,7 +641,7 @@ function render() {
   document.querySelectorAll(".rank-button").forEach((button) => {
     button.hidden = button.dataset.sort === "original_rank"
       ? state.view !== "yesterday"
-      : state.view !== "today" && button.dataset.sort !== "original_rank";
+      : state.view !== "today";
     button.classList.toggle("active", button.dataset.sort === activeSettings().sortKey);
   });
   document.querySelectorAll(".view-button").forEach((button) => {
