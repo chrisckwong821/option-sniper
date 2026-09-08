@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 class BucketScores:
     def __init__(self, path):
+        self.version = None
         self.rows = {}
         try:
             payload = json.loads(path.read_text())
@@ -17,8 +18,16 @@ class BucketScores:
         except (OSError, ValueError, KeyError, TypeError):
             self.last_session = ''
 
+    @classmethod
+    def from_payload(cls, payload, version):
+        scorer = cls.__new__(cls)
+        scorer.version = version
+        scorer.last_session = payload['last_calibration_session']
+        scorer.rows = {(r['ticker'], r['bucket'], r['tenor_class']): r for r in payload['statistics']}
+        return scorer
+
     def score(self, point, reference):
-        output = {'z': None, 'n': 0, 'bucket': None, 'reason': 'No compatible calibration.'}
+        output = {'z': None, 'n': 0, 'bucket': None, 'reason': 'No compatible calibration.', 'calibration_date': self.last_session, 'calibration_version': self.version}
         try:
             stamp = datetime.fromisoformat(point['last_valid_at']).astimezone(ZoneInfo('America/New_York'))
             session = stamp.date()

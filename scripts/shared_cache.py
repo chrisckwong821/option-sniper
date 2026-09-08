@@ -46,8 +46,10 @@ class SharedCache:
         if self._client is None:
             import boto3
             from botocore.config import Config
-            session = boto3.Session(profile_name=os.environ.get('SIGMA_AWS_PROFILE') or self.config.get('profile') or None)
-            self._client = session.client('s3', region_name=os.environ.get('SIGMA_S3_REGION') or self.config.get('region', 'ap-southeast-1'),
+            region = os.environ.get('SIGMA_S3_REGION') or self.config.get('region', 'ap-southeast-1')
+            # Login credential providers also need the region on the Session.
+            session = boto3.Session(profile_name=os.environ.get('SIGMA_AWS_PROFILE') or self.config.get('profile') or None, region_name=region)
+            self._client = session.client('s3', region_name=region,
                                           config=Config(connect_timeout=10, read_timeout=60, retries={'max_attempts': 2}))
         return self._client
 

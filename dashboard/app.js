@@ -425,7 +425,7 @@ function ivExpansionMarkup(row) {
   const scored = hasValue && typeof z === "number" && Number.isFinite(z);
   const scoreLabel = scored ? formatSigned(z, 1, "σ") : "—";
   const scoreTip = bucketScore
-    ? `${bucketScore.bucket || "No matched"} ET bucket · ${bucketScore.n || 0} historical observations. ${bucketScore.reason || ""} ${bucketScore.provisional ? "Provisional: low quote reliability." : ""}`
+    ? `${bucketScore.bucket || "No matched"} ET bucket · ${bucketScore.n || 0} historical observations. ${bucketScore.reason || ""} Calibration: ${bucketScore.calibration_date || "unknown"}. ${bucketScore.provisional ? "Provisional: low quote reliability." : ""}`
     : "Bucket sigma is unavailable from the current backend session.";
   let bucketLabel = "";
   if (bucketScore?.bucket && /^\d{2}:\d{2}$/.test(bucketScore.bucket)) {

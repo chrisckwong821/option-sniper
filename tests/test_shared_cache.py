@@ -27,6 +27,13 @@ class CacheTests(unittest.TestCase):
         atomic_json(self.root / 'history-manifest.json', dict(files=[row]))
         return row
 
+    def test_login_profile_receives_region_before_credentials_resolve(self):
+        import os
+        with patch.dict(os.environ, {'SIGMA_S3_REGION':'ap-southeast-1','SIGMA_AWS_PROFILE':'test-login'}), patch('boto3.Session') as session:
+            shared=SharedCache(self.root,bucket='test')
+            shared.client
+            session.assert_called_once_with(profile_name='test-login',region_name='ap-southeast-1')
+
     def test_new_remote_request_sidecar_supplies_missing_coverage(self):
         shared=Mock(enabled=True)
         row={'path':'requests/new.dbn.zst','request':normalized(self.request)}

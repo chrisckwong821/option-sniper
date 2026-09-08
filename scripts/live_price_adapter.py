@@ -997,6 +997,12 @@ def create_app(
         iv_tracker=iv_tracker,
     )
     store.load_cache()
+    from scripts.calibration_refresh import CalibrationRefresh
+    calibration_refresh = CalibrationRefresh(
+        store, getattr(args, "iv_cache", DEFAULT_IV_CACHE).parent,
+        universe["anchor_date"], state_bundle.get("screening_policy_fingerprint"),
+        interval=getattr(args, "calibration_refresh_seconds", 300),
+    )
     option_catalog_path = getattr(
         args,
         "option_catalog_cache",
@@ -1108,6 +1114,7 @@ def create_app(
                 "screening_policy_fingerprint"
             ),
         }
+        payload["calibration"] = dict(calibration_refresh.status)
         payload["stream"] = store.stream_metrics()
         return web.json_response(payload)
 
@@ -1125,6 +1132,7 @@ def create_app(
             asyncio.create_task(store.broadcast_loop(stop), name="price-broadcast"),
             asyncio.create_task(store.cache_loop(stop), name="price-cache"),
         ]
+        tasks.append(asyncio.create_task(calibration_refresh.run(stop), name="calibration-refresh"))
         if args.mock:
             tasks.append(asyncio.create_task(mock_feed(universe, store, stop), name="mock-feed"))
         else:
@@ -1273,6 +1281,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_OPTION_CATALOG_CACHE,
     )
+    parser.add_argument("--calibration-refresh-seconds", type=float, default=300)
     parser.add_argument("--max-definition-cost", type=float, default=1.0)
     parser.add_argument("--day-dataset", default="EQUS.MINI")
     parser.add_argument("--overnight-dataset", default="OCEA.MEMOIR")
@@ -1310,7 +1319,10 @@ def parse_args() -> argparse.Namespace:
         ],
     )
     parser.add_argument("--mock", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.calibration_refresh_seconds <= 0:
+        parser.error("--calibration-refresh-seconds must be positive")
+    return args
 
 
 def main() -> None:

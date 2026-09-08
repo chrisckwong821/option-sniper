@@ -68,3 +68,27 @@ resolution metadata follows the same local/S3/provider ordering in `symbology/`.
 Use `python -m scripts.verify_history_archive --publish` after an initial upload
 to check every file against S3's full-object CRC64 checksum and the local SHA-256
 inventory before publishing the index.
+
+## Live calibration reload
+
+The backend checks for updated local bucket statistics and the existing versioned
+S3 computed bundle every 300 seconds (`--calibration-refresh-seconds` overrides the
+interval). It reads and validates candidates off the serving event loop, then
+atomically replaces the in-memory scorer and broadcasts updated IV bucket scores
+through the existing price WebSocket. It never reconstructs history, buys data,
+or publishes to S3 from this refresh loop.
+
+Candidates must use the six-month window and supported method, valid distributions,
+a consistent holdout date, and (for S3) the matching screening fingerprint and
+checksummed manifest. Versions are identified by the payload SHA-256 and ordered
+by calibration session and generation timestamp. Unchanged or older candidates
+are ignored; malformed, unavailable, or future-dated candidates retain the active
+scorer. Calibration newer than the backend's daily reference anchor is deferred:
+this feature does not roll the complete daily reference state forward.
+
+`/api/health` includes `calibration` with the active date/version, check time,
+outcome, source, and error. Sigma tooltips include the calibration date. A browser
+refresh is unnecessary. An initial backend restart is needed to install this code;
+subsequent compatible calibration updates do not restart it. The loop does not
+create a daily publishing job, and downloaded candidates do not overwrite the
+canonical local calibration file.
