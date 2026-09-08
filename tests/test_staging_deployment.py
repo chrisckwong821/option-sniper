@@ -27,6 +27,7 @@ class StagingDeploymentTests(unittest.TestCase):
         self.assertNotIn("systemctl", deployer)
         self.assertIn("S3_BUCKET|S3_REGION|S3_PREFIX|RECONSTRUCTION_MAX_COST", deployer)
         self.assertNotIn("SIGMA_AWS_PROFILE", deployer)
+        self.assertIn("sudo grep '^DATABENTO_LIVE_OPTIONS_API_KEY=.' \"$staging_environment\"", deployer)
 
     def test_workflow_uses_the_staging_environment(self):
         workflow = (ROOT / ".github/workflows/deploy-staging.yml").read_text()

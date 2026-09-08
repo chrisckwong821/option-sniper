@@ -713,7 +713,7 @@ class DatabentoOptionFeed:
             reconnect_policy="reconnect",
             slow_reader_behavior="skip",
         )
-        replay_start = utc_now() - timedelta(minutes=self.replay_minutes)
+        replay_start = (utc_now() - timedelta(minutes=self.replay_minutes)) if self.replay_minutes > 0 else None
         self._subscribe(client, sorted(self.symbols), replay_start=replay_start)
         return client
 
@@ -794,7 +794,12 @@ class DatabentoOptionFeed:
                     name="option-subscription-planner",
                 )
                 try:
+                    records_since_yield = 0
                     async for record in self.client:
+                        records_since_yield += 1
+                        if records_since_yield >= 100:
+                            await asyncio.sleep(0)
+                            records_since_yield = 0
                         if self.stop.is_set():
                             self.client.stop()
                             break
@@ -983,6 +988,7 @@ def create_app(
         anchor_date=universe["anchor_date"],
         cache_path=getattr(args, "iv_cache", DEFAULT_IV_CACHE),
         cycle_id=state_bundle.get("generated_at_utc"),
+        calculation_interval_seconds=60,
     )
     store = PriceStore(
         symbols=symbols,
@@ -1087,6 +1093,8 @@ def create_app(
                 else option_symbols
             ),
             "calculated_symbols": len(iv_tracker.results),
+            "calculation_interval_seconds": iv_tracker.calculation_interval_seconds,
+            "pending_calculations": len(iv_tracker.pending_calculations),
             "method": "moneyness-matched-black76-v1",
             "contract_catalog": {
                 "source": (
@@ -1127,10 +1135,20 @@ def create_app(
     async def index_handler(_: web.Request) -> web.FileResponse:
         return web.FileResponse(args.dashboard / "index.html")
 
+    async def iv_calculation_loop() -> None:
+        while not stop.is_set():
+            changed = iv_tracker.flush_calculations()
+            if changed:
+                store.dirty_symbols.update(changed)
+                store.cache_dirty = True
+                store.invalidate_snapshot()
+            await asyncio.sleep(0.1)
+
     async def on_startup(_: web.Application) -> None:
         tasks = [
             asyncio.create_task(store.broadcast_loop(stop), name="price-broadcast"),
             asyncio.create_task(store.cache_loop(stop), name="price-cache"),
+            asyncio.create_task(iv_calculation_loop(), name="iv-calculation"),
         ]
         tasks.append(asyncio.create_task(calibration_refresh.run(stop), name="calibration-refresh"))
         if args.mock:
@@ -1206,7 +1224,7 @@ def create_app(
                         api_key=live_option_api_key,
                         symbols=symbols_for_feed,
                         store=store,
-                        replay_minutes=args.replay_minutes,
+                        replay_minutes=getattr(args, "option_replay_minutes", 0),
                         stop=stop,
                         symbol_provider=planned_option_symbols,
                     )
@@ -1286,6 +1304,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--day-dataset", default="EQUS.MINI")
     parser.add_argument("--overnight-dataset", default="OCEA.MEMOIR")
     parser.add_argument("--replay-minutes", type=int, default=60)
+    parser.add_argument("--option-replay-minutes", type=int, default=0)
     parser.add_argument("--broadcast-interval", type=float, default=DEFAULT_BROADCAST_INTERVAL)
     parser.add_argument("--status-interval", type=float, default=DEFAULT_STATUS_INTERVAL)
     parser.add_argument("--send-timeout", type=float, default=DEFAULT_SEND_TIMEOUT)

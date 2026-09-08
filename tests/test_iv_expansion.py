@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from scripts.iv_expansion import (
     IvExpansionTracker,
@@ -15,6 +16,50 @@ from scripts.nasdaq_universe_movers import (
     black76_straddle,
     estimate_option_iv,
 )
+
+
+class DeferredCalculationTests(unittest.TestCase):
+    def test_coalesces_quotes_and_flushes_trailing_update_after_one_minute(self):
+        with tempfile.TemporaryDirectory() as folder:
+            tracker = IvExpansionTracker([], '2026-09-11T20:00:00+00:00',
+                                         '2026-09-04', Path(folder) / 'iv.json',
+                                         calculation_interval_seconds=60)
+            tracker.references['AAA'] = {'option_expiry': '2026-09-11'}
+            tracker.ticker_by_root['AAA'] = 'AAA'
+            tracker._recalculate = Mock(return_value=True)
+            symbol = format_occ_symbol('AAA', '2026-09-11', 'C', 100)
+            first = datetime(2026, 9, 8, 14, 0, tzinfo=UTC)
+            last = first.replace(second=30)
+            for stamp, bid in [(first, 1), (last, 2)]:
+                self.assertIsNone(tracker.update_option_quote(symbol, bid, bid + .1, stamp))
+            tracker._recalculate.assert_not_called()
+            self.assertEqual(tracker.quotes['AAA'][(100.0, 'C')]['bid'], 2)
+            with patch('scripts.iv_expansion.monotonic', return_value=100):
+                self.assertEqual(tracker.flush_calculations(), ['AAA'])
+            tracker._recalculate.assert_called_once_with('AAA', last)
+            trailing = last.replace(second=45)
+            tracker.update_option_quote(symbol, 3, 3.1, trailing)
+            with patch('scripts.iv_expansion.monotonic', return_value=159):
+                self.assertEqual(tracker.flush_calculations(), [])
+            with patch('scripts.iv_expansion.monotonic', return_value=160):
+                self.assertEqual(tracker.flush_calculations(), ['AAA'])
+            tracker._recalculate.assert_called_with('AAA', trailing)
+            self.assertEqual(tracker._recalculate.call_count, 2)
+
+    def test_batches_are_bounded_and_fair(self):
+        with tempfile.TemporaryDirectory() as folder:
+            tracker = IvExpansionTracker([], '2026-09-11T20:00:00+00:00',
+                                         '2026-09-04', Path(folder) / 'iv.json',
+                                         calculation_interval_seconds=60)
+            tracker._recalculate = Mock(return_value=True)
+            stamp = datetime(2026, 9, 8, 14, 0, tzinfo=UTC)
+            for ticker in ['AAA', 'BBB', 'CCC']:
+                tracker._schedule_calculation(ticker, stamp)
+            with patch('scripts.iv_expansion.monotonic', return_value=100):
+                self.assertEqual(tracker.flush_calculations(limit=1), ['AAA'])
+                tracker._schedule_calculation('AAA', stamp)
+                self.assertEqual(tracker.flush_calculations(limit=1), ['BBB'])
+                self.assertEqual(tracker.flush_calculations(limit=1), ['CCC'])
 
 
 def option_pair(forward, strike, annual_iv, year_fraction, root="AAA", expiry="2026-08-28"):
@@ -162,6 +207,13 @@ class MoneynessMatchingTests(unittest.TestCase):
             after_close = datetime(2026, 8, 27, 21, 0, tzinfo=UTC)
             closed_result = tracker.public_results(["AAA"], after_close)[0]
             self.assertEqual(closed_result["status"], "close")
+            self.assertFalse(live_result["iv_expansion_bucket_score"]["is_stale"])
+            self.assertTrue(closed_result["iv_expansion_bucket_score"]["is_stale"])
+            self.assertEqual(
+                closed_result["iv_expansion_bucket_score"]["bucket"],
+                live_result["iv_expansion_bucket_score"]["bucket"],
+            )
+            self.assertEqual(closed_result["iv_expansion_bucket_score"]["observation_date"], "2026-08-27")
             self.assertTrue(closed_result["is_persisted"])
             self.assertEqual(
                 closed_result["iv_expansion_pct"],

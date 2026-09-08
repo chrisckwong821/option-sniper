@@ -52,6 +52,13 @@ environment_temp="$(sudo mktemp /etc/sigma-tape/.sigma-tape-staging.env.XXXXXX)"
 sudo grep -E \
   '^(DATABENTO_(API_KEY|LIVE_API_KEY|SPOT_API_KEY|LIVE_OPTION_API_KEY|LIVE_OPTIONS_API_KEY|HISTORICAL_OPTION_API_KEY|HISTORICAL_OPTIONS_API_KEY|OPTION_API_KEY|OPTIONS_API_KEY)|SIGMA_(S3_BUCKET|S3_REGION|S3_PREFIX|RECONSTRUCTION_MAX_COST))=' \
   "$production_environment" | sudo tee "$environment_temp" >/dev/null || true
+# Preserve the separately configured staging live-options credential on redeploy.
+if sudo test -f "$staging_environment" && \
+   sudo grep -q '^DATABENTO_LIVE_OPTIONS_API_KEY=.' "$staging_environment"; then
+  sudo sed -i '/^DATABENTO_LIVE_OPTIONS_API_KEY=/d' "$environment_temp"
+  sudo grep '^DATABENTO_LIVE_OPTIONS_API_KEY=.' "$staging_environment" \
+    | sudo tee -a "$environment_temp" >/dev/null
+fi
 printf '%s\n' \
   'SIGMA_ALLOWED_ORIGINS=https://staging.optionsniper.xyz' \
   | sudo tee -a "$environment_temp" >/dev/null

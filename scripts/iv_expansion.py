@@ -9,6 +9,7 @@ import sqlite3
 from contextlib import closing
 from datetime import UTC, date, datetime, time
 from pathlib import Path
+from time import monotonic
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -99,6 +100,7 @@ class IvExpansionTracker:
         fallback_quote_window_seconds: int = DEFAULT_FALLBACK_QUOTE_WINDOW_SECONDS,
         fallback_spot_max_skew_seconds: int = DEFAULT_FALLBACK_SPOT_MAX_SKEW_SECONDS,
         spot_future_tolerance_seconds: int = DEFAULT_SPOT_FUTURE_TOLERANCE_SECONDS,
+        calculation_interval_seconds: float = 0,
     ) -> None:
         self.option_expiry_close = ensure_aware(
             datetime.fromisoformat(option_expiry_close)
@@ -106,6 +108,9 @@ class IvExpansionTracker:
         self.anchor_date = anchor_date
         self.cycle_id = cycle_id or anchor_date
         self.cache_path = cache_path
+        self.calculation_interval_seconds = calculation_interval_seconds
+        self.pending_calculations: dict[str, datetime] = {}
+        self.next_calculation: dict[str, float] = {}
         self.quote_max_age_seconds = quote_max_age_seconds
         self.quote_pair_max_skew_seconds = quote_pair_max_skew_seconds
         self.fallback_quote_window_seconds = fallback_quote_window_seconds
@@ -181,7 +186,31 @@ class IvExpansionTracker:
             self.spots[ticker] = {"price": float(price), "event_time": event_time}
         if not option_market_is_open(event_time):
             return False
-        return self._recalculate(ticker, event_time)
+        return self._schedule_calculation(ticker, event_time)
+
+    def _schedule_calculation(self, ticker: str, event_time: datetime) -> bool:
+        if self.calculation_interval_seconds <= 0:
+            return self._recalculate(ticker, event_time)
+        previous = self.pending_calculations.get(ticker)
+        self.pending_calculations[ticker] = max(previous, event_time) if previous else event_time
+        return False
+
+    def flush_calculations(self, *, limit: int = 8, time_budget: float = 0.01) -> list[str]:
+        """Coalesce updates, bound work per event-loop turn, and flush trailing quotes."""
+        started = monotonic()
+        changed = []
+        processed = 0
+        for ticker, event_time in list(self.pending_calculations.items()):
+            if self.next_calculation.get(ticker, 0) > started:
+                continue
+            del self.pending_calculations[ticker]
+            self.next_calculation[ticker] = started + self.calculation_interval_seconds
+            if self._recalculate(ticker, event_time):
+                changed.append(ticker)
+            processed += 1
+            if processed >= limit or monotonic() - started >= time_budget:
+                break
+        return changed
 
     def _remember_spot(
         self,
@@ -240,7 +269,7 @@ class IvExpansionTracker:
             "raw_symbol": raw_symbol,
             "event_time": event_time,
         }
-        return ticker if self._recalculate(ticker, event_time) else None
+        return ticker if self._schedule_calculation(ticker, event_time) else None
 
     def update_mock(self, ticker: str, expansion_pct: float, event_time: datetime) -> bool:
         reference = self.references.get(ticker)
@@ -539,7 +568,11 @@ class IvExpansionTracker:
             output.append({
                 **result,
                 "status": status,
-                "iv_expansion_bucket_score": self.bucket_scores.score(result, self.references.get(ticker, {})),
+                "iv_expansion_bucket_score": {
+                    **self.bucket_scores.score(result, self.references.get(ticker, {})),
+                    "is_stale": not live,
+                    "quote_status": status,
+                },
                 "is_persisted": not live,
                 "age_seconds": round(age, 1),
             })
