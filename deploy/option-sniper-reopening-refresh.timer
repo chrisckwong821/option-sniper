@@ -1,0 +1,13 @@
+[Unit]
+Description=Check for an upcoming overnight reopening
+
+[Timer]
+OnCalendar=*-*-* 19:45:00 America/New_York
+OnCalendar=*-*-* 20:00:00 America/New_York
+OnCalendar=*-*-* 20:15:00 America/New_York
+OnCalendar=*-*-* 20:45:00 America/New_York
+Persistent=true
+Unit=option-sniper-reopening-refresh.service
+
+[Install]
+WantedBy=timers.target

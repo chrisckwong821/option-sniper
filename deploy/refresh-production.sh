@@ -5,8 +5,13 @@ current_link="/opt/sigma-tape/current"
 state_cache="/var/lib/sigma-tape/dashboard-state.json"
 cache_name="dashboard-state.json"
 services=()
+refresh_args=()
 case "${1:-all}" in
   all) ;;
+  reopening)
+    refresh_args=(--reopening-only)
+    services=(backend)
+    ;;
   yesterday)
     cache_name="yesterday-state.json"
     state_cache="/var/lib/sigma-tape/$cache_name"
@@ -34,7 +39,13 @@ cd "$release"
 env SIGMA_TAPE_VERSION="$revision" \
   docker compose -f deploy/compose.yml run --rm --no-deps \
   --entrypoint python backend -m scripts.refresh_dashboard_cache \
-  --state-cache "/app/.cache/sigma-tape/$cache_name"
+  --state-cache "/app/.cache/sigma-tape/$cache_name" "${refresh_args[@]}"
+
+# A calendar guard can skip without creating a cache.
+if [[ ! -f "$state_cache" ]]; then
+  echo "No cache published"
+  exit 0
+fi
 
 after="$(sha256sum "$state_cache" | awk '{print $1}')"
 if [[ "$before" == "$after" ]]; then

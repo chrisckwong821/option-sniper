@@ -203,6 +203,48 @@ class UniverseFilterTests(unittest.TestCase):
         self.assertFalse(capped)
         self.assertEqual(exclusions["liquidity"], 0)
 
+    def test_candidate_cap_prefers_worst_session_notional_then_market_cap(self):
+        sessions = [date(2026, 8, 26), date(2026, 8, 27)]
+        notionals = {"AAA": 60e6, "BBB": 70e6, "CCC": 60e6, "DDD": 50e6}
+        market_caps = {"AAA": 20e9, "BBB": 15e9, "CCC": 30e9, "DDD": 40e9}
+        history = pd.DataFrame([
+            {
+                "symbol": symbol,
+                "date": session,
+                "open": 100,
+                "close": 100,
+                "volume": notional / 100,
+            }
+            for symbol, notional in notionals.items()
+            for session in sessions
+        ])
+        universe = [
+            {
+                "symbol": symbol,
+                "name": f"{symbol} Common Stock",
+                "sector": "Technology",
+                "industry": "Software",
+                "market_cap": market_caps[symbol],
+            }
+            for symbol in notionals
+        ]
+
+        qualified, selected, effective, capped, _ = build_spot_candidates(
+            history,
+            universe,
+            daily_notional_min=25_000_000,
+            candidate_target=3,
+            window_start=sessions[0],
+            week_dates=sessions,
+            anchor_label="official close",
+            anchor_field="close",
+        )
+
+        self.assertEqual([row["ticker"] for row in qualified], ["BBB", "CCC", "AAA", "DDD"])
+        self.assertEqual([row["ticker"] for row in selected], ["BBB", "CCC", "AAA"])
+        self.assertEqual(effective, 60_000_000)
+        self.assertTrue(capped)
+
     def test_spot_cost_guard_stops_before_download(self):
         client = MagicMock()
         client.metadata.get_cost.return_value = 1.01

@@ -103,6 +103,29 @@ test("the open dashboard replaces yesterday rows while preserving today's object
   vm.runInContext("render = () => {};", context);
   await vm.runInContext("refreshDashboardState()", context);
   vm.runInContext(`
+    state.payload.rows = [
+      { ticker: "SECOND", company_name: "Second", sector: "Technology",
+        iv_reliability: "high", original_rank: 2, gain_pct: 50, z_score: 9 },
+      { ticker: "FIRST", company_name: "First", sector: "Technology",
+        iv_reliability: "high", original_rank: 1, gain_pct: -5, z_score: -2 },
+    ];
+    state.view = "yesterday";
+    setSort("gain_pct");
+  `, context);
+  assert.equal(
+    vm.runInContext("state.viewSettings.yesterday.sortKey", context),
+    "original_rank",
+  );
+  assert.equal(
+    vm.runInContext("visibleRows('yesterday').map((row) => row.ticker).join(',')", context),
+    "FIRST,SECOND",
+  );
+  vm.runInContext("state.view = 'today'; setSort('gain_pct');", context);
+  assert.equal(
+    vm.runInContext("state.viewSettings.today.sortKey", context),
+    "gain_pct",
+  );
+  vm.runInContext(`
     state.view = "today";
     state.search = "live";
     state.sector = "Technology";
@@ -135,4 +158,46 @@ test("the open dashboard replaces yesterday rows while preserving today's object
   await vm.runInContext("refreshDashboardState()", context);
   assert.equal(vm.runInContext("state.todayPayload.anchor_date", context), "2026-08-27");
   assert.equal(vm.runInContext("state.todayPayload.rows[0].anchor_price", context), 110);
+});
+
+test("reopening prices rank Today overnight without changing saved gainers or weekday carry", async () => {
+  const element = () => ({ dataset: {}, classList: { toggle() {} },
+    addEventListener() {}, querySelectorAll: () => [], setAttribute() {} });
+  const initial = bundle("2026-09-04", "LIVE");
+  initial.today.anchor_date = "2026-09-04";
+  initial.cache.target_completed_session = "2026-09-04";
+  initial.refresh_plan = { next_session: "2026-09-08" };
+  const context = vm.createContext({
+    document: { visibilityState: "visible", querySelector: element,
+      querySelectorAll: () => [], addEventListener() {} },
+    fetch: async () => response(initial),
+    WebSocket: class { addEventListener() {} close() {} },
+    requestAnimationFrame: () => {},
+    window: { SigmaMath: require("../dashboard/live-calculations.js"),
+      SigmaStateRefresh: { createLoader }, location: { protocol: "http:", host: "localhost" },
+      setInterval() {}, setTimeout() {}, clearTimeout() {}, addEventListener() {} },
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "../dashboard/app.js"), "utf8"), context);
+  vm.runInContext("render = () => {};", context);
+  await vm.runInContext("refreshDashboardState()", context);
+  vm.runInContext(`
+    state.live.marketSession = "overnight";
+    state.live.dataDate = "2026-09-08";
+    globalThis.tick = { ticker: "LIVE", price: 105, session: "overnight",
+      trading_date: "2026-09-08", ts_event: "2026-09-08T00:01:00Z", is_stale: false,
+      regular_close: { price: 100, trading_date: "2026-09-04", ts_event: "2026-09-04T20:00:00Z" } };
+    applyLivePrice(tick, "2026-09-08");
+  `, context);
+  assert.ok(Math.abs(vm.runInContext("state.todayPayload.rows[0].z_score", context) - Math.log(1.05) / .02) < 1e-10);
+  assert.equal(vm.runInContext("state.todayPayload.rows[0].holding_completed_close", context), false);
+  assert.equal(vm.runInContext("state.payload.rows[0].last_price", context), 100);
+  vm.runInContext(`applyLivePrice({ ...tick, price: 120, is_stale: true, ts_event: "2026-09-08T00:02:00Z" }, "2026-09-08")`, context);
+  assert.equal(vm.runInContext("state.todayPayload.rows[0].last_price", context), 105);
+  vm.runInContext(`
+    state.todayPayload.rows[0].reopening_overnight = false;
+    state.todayPayload.rows[0].payload_anchor_date = "2026-09-07";
+    state.cache.target_completed_session = "2026-09-07";
+    applyLivePrice({ ...tick, ts_event: "2026-09-08T00:03:00Z" }, "2026-09-08");
+  `, context);
+  assert.equal(vm.runInContext("state.todayPayload.rows[0].last_price", context), 100);
 });

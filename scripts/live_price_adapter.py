@@ -15,14 +15,36 @@ import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 import databento as db
 from aiohttp import WSMsgType, web
 
 try:
-    from .databento_config import resolve_live_api_key
+    from .iv_expansion import IvExpansionTracker, option_contract_symbols
+except ImportError:
+    from iv_expansion import IvExpansionTracker, option_contract_symbols
+
+try:
+    from .option_contract_catalog import (
+        fetch_option_contract_catalog,
+        load_option_contract_catalog,
+        plan_option_subscriptions,
+    )
+except ImportError:
+    from option_contract_catalog import (
+        fetch_option_contract_catalog,
+        load_option_contract_catalog,
+        plan_option_subscriptions,
+    )
+
+try:
+    from .databento_config import (
+        resolve_historical_api_keys,
+        resolve_live_api_key,
+        resolve_live_option_api_key,
+    )
     from .dashboard_state import (
         DEFAULT_STATE_CACHE,
         DashboardStateManager,
@@ -32,7 +54,11 @@ try:
         with_yesterday_snapshot,
     )
 except ImportError:  # Support direct execution with `python scripts/...`.
-    from databento_config import resolve_live_api_key
+    from databento_config import (
+        resolve_historical_api_keys,
+        resolve_live_api_key,
+        resolve_live_option_api_key,
+    )
     from dashboard_state import (
         DEFAULT_STATE_CACHE,
         DashboardStateManager,
@@ -46,6 +72,10 @@ except ImportError:  # Support direct execution with `python scripts/...`.
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DASHBOARD = ROOT / "dashboard"
 DEFAULT_CACHE = ROOT / ".cache" / "sigma-tape" / "live-prices.json"
+DEFAULT_IV_CACHE = ROOT / ".cache" / "sigma-tape" / "live-iv-expansion.json"
+DEFAULT_OPTION_CATALOG_CACHE = (
+    ROOT / ".cache" / "sigma-tape" / "option-contracts.json"
+)
 EASTERN = ZoneInfo("America/New_York")
 SESSION_LABELS = {
     "regular": "Regular",
@@ -126,12 +156,14 @@ class PriceStore:
         broadcast_interval: float = DEFAULT_BROADCAST_INTERVAL,
         status_interval: float = DEFAULT_STATUS_INTERVAL,
         send_timeout: float = DEFAULT_SEND_TIMEOUT,
+        iv_tracker: IvExpansionTracker | None = None,
     ) -> None:
         self.symbols = frozenset(symbols)
         self.cache_path = cache_path
         self.broadcast_interval = broadcast_interval
         self.status_interval = status_interval
         self.send_timeout = send_timeout
+        self.iv_tracker = iv_tracker
         self.prices: dict[str, dict[str, Any]] = {}
         self.regular_prices: dict[str, dict[str, Any]] = {}
         self.feed_status: dict[str, dict[str, Any]] = {}
@@ -219,6 +251,11 @@ class PriceStore:
             "is_extended_hours": session != "regular",
             "volume": volume,
         }
+        iv_updated = (
+            self.iv_tracker.update_spot(ticker, price, event_time)
+            if self.iv_tracker is not None
+            else False
+        )
         regular_updated = False
         if session == "regular":
             previous_regular = self.regular_prices.get(ticker)
@@ -234,10 +271,32 @@ class PriceStore:
         )
         if latest_updated:
             self.prices[ticker] = point
-        if not latest_updated and not regular_updated:
+        if not latest_updated and not regular_updated and not iv_updated:
             return False
 
         self.touch_feed(dataset)
+        self.dirty_symbols.add(ticker)
+        self.cache_dirty = True
+        self.invalidate_snapshot()
+        return True
+
+    def update_option_quote(
+        self,
+        raw_symbol: str,
+        bid: float,
+        ask: float,
+        event_time: datetime,
+    ) -> bool:
+        if self.iv_tracker is None:
+            return False
+        ticker = self.iv_tracker.update_option_quote(
+            raw_symbol,
+            bid,
+            ask,
+            event_time,
+        )
+        if ticker is None:
+            return False
         self.dirty_symbols.add(ticker)
         self.cache_dirty = True
         self.invalidate_snapshot()
@@ -286,11 +345,19 @@ class PriceStore:
                 for ticker in tickers
                 if ticker in self.prices
             ],
+            "iv_expansions": (
+                self.iv_tracker.public_results(tickers, now)
+                if self.iv_tracker is not None
+                else []
+            ),
             "feeds": self.feed_status,
         }
 
     def payload(self, message_type: str = "snapshot") -> dict[str, Any]:
-        return self.message(message_type, sorted(self.prices))
+        tickers = set(self.prices)
+        if self.iv_tracker is not None:
+            tickers.update(self.iv_tracker.results)
+        return self.message(message_type, sorted(tickers))
 
     def snapshot_text(self) -> tuple[int, str]:
         cached = self.snapshot_cache
@@ -362,6 +429,8 @@ class PriceStore:
 
     def load_cache(self) -> None:
         if not self.cache_path.exists():
+            if self.iv_tracker is not None:
+                self.iv_tracker.load_cache()
             return
         try:
             cached = json.loads(self.cache_path.read_text())
@@ -396,9 +465,19 @@ class PriceStore:
         except (OSError, ValueError, TypeError, KeyError):
             self.prices = {}
             self.regular_prices = {}
+        if self.iv_tracker is not None:
+            for point in self.regular_prices.values():
+                self.iv_tracker.update_spot(
+                    str(point["ticker"]),
+                    float(point["price"]),
+                    datetime.fromisoformat(point["ts_event"]),
+                )
+            self.iv_tracker.load_cache()
 
     def save_cache(self) -> None:
         if not self.cache_dirty:
+            if self.iv_tracker is not None:
+                self.iv_tracker.save_cache()
             return
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.cache_path.with_suffix(".tmp")
@@ -409,6 +488,8 @@ class PriceStore:
         }, indent=2) + "\n")
         os.replace(temporary, self.cache_path)
         self.cache_dirty = False
+        if self.iv_tracker is not None:
+            self.iv_tracker.save_cache()
 
     async def broadcast_loop(self, stop: asyncio.Event) -> None:
         last_status_at = asyncio.get_running_loop().time()
@@ -585,6 +666,194 @@ class DatabentoFeed:
                 backoff = min(30, backoff * 2)
 
 
+class DatabentoOptionFeed:
+    def __init__(
+        self,
+        api_key: str,
+        symbols: list[str],
+        store: PriceStore,
+        replay_minutes: int,
+        stop: asyncio.Event,
+        subscription_chunk_size: int = 2_000,
+        symbol_provider: Callable[[], list[str]] | None = None,
+        replan_interval_seconds: float = 30.0,
+    ) -> None:
+        self.api_key = api_key
+        self.symbols = set(symbols)
+        self.store = store
+        self.replay_minutes = replay_minutes
+        self.stop = stop
+        self.subscription_chunk_size = subscription_chunk_size
+        self.symbol_provider = symbol_provider
+        self.replan_interval_seconds = replan_interval_seconds
+        self.client: db.Live | None = None
+
+    def _subscribe(
+        self,
+        client: db.Live,
+        symbols: list[str],
+        *,
+        replay_start: datetime | None,
+    ) -> None:
+        for start in range(0, len(symbols), self.subscription_chunk_size):
+            request = {
+                "dataset": "OPRA.PILLAR",
+                "schema": "cbbo-1s",
+                "symbols": symbols[start:start + self.subscription_chunk_size],
+                "stype_in": "raw_symbol",
+            }
+            if replay_start is not None:
+                request["start"] = replay_start
+            client.subscribe(**request)
+
+    def connect(self) -> db.Live:
+        client = db.Live(
+            key=self.api_key,
+            heartbeat_interval_s=10,
+            reconnect_policy="reconnect",
+            slow_reader_behavior="skip",
+        )
+        replay_start = utc_now() - timedelta(minutes=self.replay_minutes)
+        self._subscribe(client, sorted(self.symbols), replay_start=replay_start)
+        return client
+
+    async def refresh_subscriptions(self) -> None:
+        if self.symbol_provider is None:
+            return
+        while not self.stop.is_set() and self.client is not None:
+            try:
+                await asyncio.wait_for(
+                    self.stop.wait(),
+                    timeout=self.replan_interval_seconds,
+                )
+            except asyncio.TimeoutError:
+                pass
+            if self.stop.is_set() or self.client is None:
+                break
+            additions = sorted(set(self.symbol_provider()) - self.symbols)
+            if not additions:
+                continue
+            # Databento accepts additional subscriptions after a session has
+            # started, but intraday replay cannot be requested for additions.
+            self._subscribe(self.client, additions, replay_start=None)
+            self.symbols.update(additions)
+            self.store.set_feed_status(
+                "OPRA.PILLAR",
+                "subscribed",
+                f"{len(self.symbols)} definition-backed same-expiry contracts",
+            )
+
+    async def connect_without_blocking_server(self) -> db.Live:
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[db.Live] = loop.create_future()
+
+        def resolve(client: db.Live | None, error: BaseException | None) -> None:
+            if future.done():
+                if client is not None:
+                    with contextlib.suppress(Exception):
+                        client.terminate()
+                return
+            if error is not None:
+                future.set_exception(error)
+            else:
+                future.set_result(client)  # type: ignore[arg-type]
+
+        def connect_in_thread() -> None:
+            try:
+                client = self.connect()
+            except BaseException as exc:
+                with contextlib.suppress(RuntimeError):
+                    loop.call_soon_threadsafe(resolve, None, exc)
+            else:
+                with contextlib.suppress(RuntimeError):
+                    loop.call_soon_threadsafe(resolve, client, None)
+
+        threading.Thread(
+            target=connect_in_thread,
+            name="databento-connect-OPRA.PILLAR",
+            daemon=True,
+        ).start()
+        return await future
+
+    async def run(self) -> None:
+        backoff = 1
+        dataset = "OPRA.PILLAR"
+        while not self.stop.is_set():
+            mappings: dict[int, str] = {}
+            self.store.set_feed_status(dataset, "connecting")
+            try:
+                self.client = await self.connect_without_blocking_server()
+                self.store.set_feed_status(
+                    dataset,
+                    "subscribed",
+                    f"{len(self.symbols)} definition-backed same-expiry contracts",
+                )
+                backoff = 1
+                planner = asyncio.create_task(
+                    self.refresh_subscriptions(),
+                    name="option-subscription-planner",
+                )
+                try:
+                    async for record in self.client:
+                        if self.stop.is_set():
+                            self.client.stop()
+                            break
+                        if isinstance(record, db.SymbolMappingMsg):
+                            mapped_symbol = getattr(record, "stype_out_symbol", None)
+                            input_symbol = getattr(record, "stype_in_symbol", None)
+                            raw_symbol = str(mapped_symbol or input_symbol or "").rstrip("\x00")
+                            if not raw_symbol:
+                                continue
+                            mappings[record.instrument_id] = raw_symbol
+                        elif isinstance(record, db.CBBOMsg):
+                            raw_symbol = mappings.get(record.instrument_id)
+                            if not raw_symbol:
+                                continue
+                            try:
+                                bid = float(record.pretty_bid_px_00)
+                                ask = float(record.pretty_ask_px_00)
+                            except (TypeError, ValueError):
+                                continue
+                            self.store.update_option_quote(
+                                raw_symbol=raw_symbol,
+                                bid=bid,
+                                ask=ask,
+                                event_time=timestamp_from_ns(record.ts_recv),
+                            )
+                            self.store.touch_feed(dataset)
+                        elif isinstance(record, db.SystemMsg):
+                            self.store.touch_feed(dataset)
+                        elif isinstance(record, db.ErrorMsg):
+                            self.store.set_feed_status(
+                                dataset,
+                                "degraded",
+                                str(record.msg),
+                            )
+                finally:
+                    planner.cancel()
+                    await asyncio.gather(planner, return_exceptions=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.store.set_feed_status(
+                    dataset,
+                    "retrying",
+                    f"{type(exc).__name__}: {exc}",
+                )
+            finally:
+                if self.client is not None:
+                    with contextlib.suppress(Exception):
+                        self.client.stop()
+                self.client = None
+
+            if self.stop.is_set():
+                break
+            try:
+                await asyncio.wait_for(self.stop.wait(), timeout=backoff)
+            except asyncio.TimeoutError:
+                backoff = min(30, backoff * 2)
+
+
 async def mock_feed(
     universe: dict[str, Any], store: PriceStore, stop: asyncio.Event
 ) -> None:
@@ -604,6 +873,12 @@ async def mock_feed(
         if session == "closed":
             session = "afterhours"
         trading_date = trading_date_at(now)
+        mock_iv_time = now
+        if session != "regular":
+            mock_iv_date = universe.get("data_date", trading_date)
+            mock_iv_time = datetime.fromisoformat(
+                f"{mock_iv_date}T15:59:00"
+            ).replace(tzinfo=EASTERN).astimezone(UTC)
         if session in {"afterhours", "overnight"}:
             regular_date = universe.get("anchor_date", trading_date)
             regular_time = datetime.fromisoformat(
@@ -631,6 +906,13 @@ async def mock_feed(
                 session_override=session,
                 trading_date_override=trading_date,
             )
+            if store.iv_tracker is not None and session in {"regular", "afterhours"}:
+                expansion = (-2.0, 6.0, 13.4, 24.0, 38.2)[index % 5]
+                store.iv_tracker.update_mock(
+                    ticker,
+                    expansion + wave * 100,
+                    mock_iv_time,
+                )
         phase += 0.35
         await asyncio.sleep(1)
 
@@ -677,6 +959,15 @@ def create_app(
             mock_symbol_count=getattr(args, "mock_symbols", 30),
         )
 
+    from scripts.historical_cache import HistoricalCache
+    if not args.mock and hasattr(args, "state_cache"):
+        from scripts.startup_history import ensure_bucket_statistics
+        try:
+            ensure_bucket_statistics(args.state_cache.parent, state_bundle,
+                                     allow_download=args.refresh_mode != "never")
+        except RuntimeError as exc:
+            state_bundle.setdefault("cache", {})["history_error"] = str(exc)
+
     state_bundle = with_yesterday_snapshot(
         state_bundle, getattr(args, "yesterday_state_cache", None),
     )
@@ -686,6 +977,13 @@ def create_app(
     snapshot = state_bundle["snapshot"]
     universe = state_bundle["today"]
     symbols = tracked_symbols(snapshot, universe)
+    iv_tracker = IvExpansionTracker(
+        rows=universe["rows"],
+        option_expiry_close=state_bundle["refresh_plan"]["option_expiry_close"],
+        anchor_date=universe["anchor_date"],
+        cache_path=getattr(args, "iv_cache", DEFAULT_IV_CACHE),
+        cycle_id=state_bundle.get("generated_at_utc"),
+    )
     store = PriceStore(
         symbols=symbols,
         cache_path=args.cache,
@@ -696,8 +994,52 @@ def create_app(
         ),
         status_interval=getattr(args, "status_interval", DEFAULT_STATUS_INTERVAL),
         send_timeout=getattr(args, "send_timeout", DEFAULT_SEND_TIMEOUT),
+        iv_tracker=iv_tracker,
     )
     store.load_cache()
+    option_catalog_path = getattr(
+        args,
+        "option_catalog_cache",
+        DEFAULT_OPTION_CATALOG_CACHE,
+    )
+    option_expiry = state_bundle["refresh_plan"]["option_expiry"]
+    option_catalog = None if args.mock else load_option_contract_catalog(
+        option_catalog_path,
+        option_expiry=option_expiry,
+        minimum_as_of_date=state_bundle["refresh_plan"]["prior_session"],
+    )
+    option_runtime: dict[str, Any] = {
+        "catalog": option_catalog,
+        "catalog_error": None,
+        "feed": None,
+        "plans": {},
+    }
+
+    def current_spot_prices() -> dict[str, Any]:
+        return {
+            ticker: point.get("price")
+            for ticker, point in store.prices.items()
+        }
+
+    def planned_option_symbols() -> list[str]:
+        catalog = option_runtime["catalog"]
+        if catalog is None:
+            option_runtime["plans"] = {}
+            return option_contract_symbols(universe["rows"])
+        catalog_symbols, plans = plan_option_subscriptions(
+            universe["rows"],
+            catalog,
+            spot_prices=current_spot_prices(),
+        )
+        covered = set((catalog.get("contracts") or {}).keys())
+        fallback_rows = [
+            row for row in universe["rows"]
+            if row.get("ticker") not in covered
+        ]
+        option_runtime["plans"] = plans
+        return sorted(set(catalog_symbols) | set(option_contract_symbols(fallback_rows)))
+
+    option_symbols = planned_option_symbols()
     stop = asyncio.Event()
     app = web.Application()
     app[TASKS_KEY] = []
@@ -731,6 +1073,33 @@ def create_app(
         payload["fixed_list_symbols"] = len(snapshot["rows"])
         payload["iv_universe_symbols"] = len(universe["rows"])
         payload["cached_symbols"] = len(store.prices)
+        payload["iv_expansion"] = {
+            "reference_symbols": len(iv_tracker.references),
+            "subscribed_contracts": len(
+                option_runtime["feed"].symbols
+                if option_runtime["feed"] is not None
+                else option_symbols
+            ),
+            "calculated_symbols": len(iv_tracker.results),
+            "method": "moneyness-matched-black76-v1",
+            "contract_catalog": {
+                "source": (
+                    "definition"
+                    if option_runtime["catalog"] is not None
+                    else "historical_quote_pairs"
+                ),
+                "as_of_date": (
+                    option_runtime["catalog"].get("as_of_date")
+                    if option_runtime["catalog"] is not None
+                    else None
+                ),
+                "covered_symbols": len(
+                    (option_runtime["catalog"] or {}).get("contracts", {})
+                ),
+                "planned_symbols": len(option_runtime["plans"]),
+                "last_error": option_runtime["catalog_error"],
+            },
+        }
         payload["dashboard_state"] = {
             "data_date": snapshot["data_date"],
             "status": state_bundle.get("cache", {}).get("status", "unknown"),
@@ -759,8 +1128,10 @@ def create_app(
         if args.mock:
             tasks.append(asyncio.create_task(mock_feed(universe, store, stop), name="mock-feed"))
         else:
-            api_key = resolve_live_api_key()
-            if not api_key:
+            equity_api_key = resolve_live_api_key()
+            live_option_api_key = resolve_live_option_api_key()
+            _, historical_option_api_key = resolve_historical_api_keys()
+            if not equity_api_key:
                 store.set_feed_status(
                     "DATABENTO",
                     "offline",
@@ -778,7 +1149,7 @@ def create_app(
                     ))
                 for config in configs:
                     feed = DatabentoFeed(
-                        api_key=api_key,
+                        api_key=equity_api_key,
                         config=config,
                         symbols=symbols,
                         store=store,
@@ -786,6 +1157,70 @@ def create_app(
                         stop=stop,
                     )
                     tasks.append(asyncio.create_task(feed.run(), name=f"feed-{config.dataset}"))
+            if live_option_api_key:
+                async def run_option_feed() -> None:
+                    store.set_feed_status(
+                        "OPRA.PILLAR",
+                        "connecting",
+                        "Discovering listed same-expiry contracts",
+                    )
+                    if historical_option_api_key:
+                        try:
+                            option_runtime["catalog"] = await asyncio.to_thread(
+                                fetch_option_contract_catalog,
+                                HistoricalCache(
+                                    historical_option_api_key, root=args.state_cache.parent),
+                                universe["rows"],
+                                as_of_date=universe["anchor_date"],
+                                option_expiry=option_expiry,
+                                cache_path=option_catalog_path,
+                                max_cost=getattr(args, "max_definition_cost", 1.0),
+                            )
+                        except Exception as exc:
+                            option_runtime["catalog_error"] = (
+                                f"{type(exc).__name__}: {exc}"
+                            )
+                    elif option_runtime["catalog"] is None:
+                        option_runtime["catalog_error"] = (
+                            "DATABENTO_HISTORICAL_OPTIONS_API_KEY is not set; "
+                            "using contracts retained in the dashboard snapshot"
+                        )
+
+                    symbols_for_feed = planned_option_symbols()
+                    if not symbols_for_feed:
+                        store.set_feed_status(
+                            "OPRA.PILLAR",
+                            "offline",
+                            "No same-expiry option contracts are available",
+                        )
+                        return
+                    option_feed = DatabentoOptionFeed(
+                        api_key=live_option_api_key,
+                        symbols=symbols_for_feed,
+                        store=store,
+                        replay_minutes=args.replay_minutes,
+                        stop=stop,
+                        symbol_provider=planned_option_symbols,
+                    )
+                    option_runtime["feed"] = option_feed
+                    await option_feed.run()
+
+                tasks.append(asyncio.create_task(
+                    run_option_feed(),
+                    name="feed-OPRA.PILLAR",
+                ))
+            elif not live_option_api_key:
+                store.set_feed_status(
+                    "OPRA.PILLAR",
+                    "offline",
+                    "DATABENTO_LIVE_OPTIONS_API_KEY is not set",
+                )
+            else:
+                store.set_feed_status(
+                    "OPRA.PILLAR",
+                    "offline",
+                    "Today's IV reference has no option-chain strikes; refresh the dashboard state",
+                )
         app[TASKS_KEY] = tasks
 
     async def on_cleanup(_: web.Application) -> None:
@@ -809,7 +1244,8 @@ def create_app(
     app.router.add_get("/ws/prices", websocket_handler)
     app.router.add_get("/api/health", health_handler)
     app.router.add_get("/api/state", state_handler)
-    for asset in ("app.js", "live-calculations.js", "state-refresh.js", "styles.css"):
+    for asset in ("app.js", "live-calculations.js", "state-refresh.js", "styles.css",
+                  "iv-sigma-prototype.html", "iv-sigma-prototype.css", "iv-sigma-prototype.js"):
         async def asset_handler(
             _: web.Request,
             asset_path: Path = args.dashboard / asset,
@@ -831,6 +1267,13 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_STATE_CACHE.with_name("yesterday-state.json"),
     )
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
+    parser.add_argument("--iv-cache", type=Path, default=DEFAULT_IV_CACHE)
+    parser.add_argument(
+        "--option-catalog-cache",
+        type=Path,
+        default=DEFAULT_OPTION_CATALOG_CACHE,
+    )
+    parser.add_argument("--max-definition-cost", type=float, default=1.0)
     parser.add_argument("--day-dataset", default="EQUS.MINI")
     parser.add_argument("--overnight-dataset", default="OCEA.MEMOIR")
     parser.add_argument("--replay-minutes", type=int, default=60)

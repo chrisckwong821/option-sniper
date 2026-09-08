@@ -165,3 +165,17 @@ assert.equal(SigmaMath.streamSequenceDecision(8, "status", 8).action, "accept");
 assert.equal(SigmaMath.streamSequenceDecision(null, "delta", 1).action, "resync");
 
 console.log("live calculations: ok");
+
+for (const [anchor, next, expected] of [
+  ["2026-08-28", "2026-08-31", true],
+  ["2026-09-04", "2026-09-08", true],
+  ["2026-11-25", "2026-11-27", true],
+  ["2026-09-08", "2026-09-09", false],
+]) {
+  const point = { session: "overnight", trading_date: next, is_stale: false };
+  assert.equal(SigmaMath.isReopeningOvernight("today", anchor, next, "overnight", point), expected);
+  assert.equal(SigmaMath.isReopeningOvernight("yesterday", anchor, next, "overnight", point), false);
+  assert.equal(SigmaMath.isReopeningOvernight("today", anchor, next, "overnight", { ...point, is_stale: true }), false);
+  assert.equal(SigmaMath.isReopeningOvernight("today", anchor, next, "overnight", { ...point, trading_date: anchor }), false);
+  assert.equal(SigmaMath.isReopeningOvernight("today", anchor, next, "premarket", point), false);
+}

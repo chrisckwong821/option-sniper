@@ -22,6 +22,7 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.args = argparse.Namespace(
             dashboard=root / "dashboard",
             cache=Path(self.tempdir.name) / "live-prices.json",
+            iv_cache=Path(self.tempdir.name) / "live-iv-expansion.json",
             mock=True,
             allowed_origin=[],
             day_dataset="EQUS.MINI",

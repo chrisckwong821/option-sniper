@@ -2,6 +2,7 @@ const state = {
   payload: null,
   todayPayload: null,
   cache: null,
+  refreshPlan: null,
   rowsByTicker: new Map(),
   view: "yesterday",
   search: "",
@@ -28,6 +29,7 @@ const state = {
     pricesReceived: 0,
     sequence: null,
     points: new Map(),
+    ivExpansions: new Map(),
   },
   renderQueued: false,
 };
@@ -138,6 +140,16 @@ function formatPriceTime(value) {
     hour: "numeric",
     minute: "2-digit",
     second: "2-digit",
+    timeZone: "America/New_York",
+  }).format(new Date(value));
+}
+
+function formatOptionTime(value) {
+  if (!value) return "--";
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
     timeZone: "America/New_York",
   }).format(new Date(value));
 }
@@ -261,6 +273,9 @@ function visibleRows(view = state.view) {
       return true;
     })
     .sort((a, b) => {
+      if (view === "yesterday") {
+        return Number(a.original_rank) - Number(b.original_rank);
+      }
       if (view === "today") {
         const premarketPriority = window.SigmaMath.premarketTradePriority(
           b,
@@ -278,6 +293,10 @@ function visibleRows(view = state.view) {
           return displayGainPct(row, view);
         }
         if (settings.sortKey === "abs_z_score") return Math.abs(Number(row.z_score));
+        if (settings.sortKey === "iv_expansion_pct") {
+          if (row.iv_expansion_pct == null) return Number.NaN;
+          return Number(row.iv_expansion_pct);
+        }
         return Number(row[settings.sortKey]);
       };
       const aValue = sortValue(a);
@@ -312,7 +331,7 @@ function extendedPriceState(row) {
 function priceStackMarkup(row, includeExtendedChange = false) {
   const priceState = extendedPriceState(row);
   const regularTime = formatPriceTime(row.regular_timestamp);
-  const displaysCompletedSession = window.SigmaMath.displaysCompletedSession(
+  const displaysCompletedSession = !row.reopening_overnight && window.SigmaMath.displaysCompletedSession(
     state.live.marketSession,
     row.holding_completed_close,
   );
@@ -365,7 +384,7 @@ function gainStackMarkup(row) {
   );
   const hasRegularGain = Number.isFinite(regularGain);
   const regularDirection = hasRegularGain && regularGain >= 0 ? "positive" : "negative";
-  const displaysCompletedSession = window.SigmaMath.displaysCompletedSession(
+  const displaysCompletedSession = !row.reopening_overnight && window.SigmaMath.displaysCompletedSession(
     state.live.marketSession,
     row.holding_completed_close,
   );
@@ -396,6 +415,65 @@ function gainStackMarkup(row) {
     </span>`;
 }
 
+function ivExpansionMarkup(row) {
+  if (row.dashboard_view !== "today") return "";
+  const rawValue = row.iv_expansion_pct;
+  const value = Number(rawValue);
+  const hasValue = rawValue !== null && rawValue !== undefined && Number.isFinite(value);
+  const bucketScore = row.iv_expansion_bucket_score;
+  const z = bucketScore?.z;
+  const scored = hasValue && typeof z === "number" && Number.isFinite(z);
+  const scoreLabel = scored ? formatSigned(z, 1, "σ") : "—";
+  const scoreTip = bucketScore
+    ? `${bucketScore.bucket || "No matched"} ET bucket · ${bucketScore.n || 0} historical observations. ${bucketScore.reason || ""} ${bucketScore.provisional ? "Provisional: low quote reliability." : ""}`
+    : "Bucket sigma is unavailable from the current backend session.";
+  let bucketLabel = "";
+  if (bucketScore?.bucket && /^\d{2}:\d{2}$/.test(bucketScore.bucket)) {
+    const [hour, minute] = bucketScore.bucket.split(":").map(Number);
+    const end = hour * 60 + minute + 30;
+    bucketLabel = `${bucketScore.bucket}–${String(Math.floor(end / 60)).padStart(2, "0")}:${String(end % 60).padStart(2, "0")} ET`;
+  }
+  const status = {
+    live: "Live",
+    last_quote: "Last quote",
+    close: "Close",
+  }[row.iv_expansion_status] || "Close";
+  const timestamp = row.iv_expansion_timestamp ? new Intl.DateTimeFormat("en-GB", {hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "America/New_York"}).format(new Date(row.iv_expansion_timestamp)) : "--";
+  const referenceStrikes = (row.iv_expansion_reference_strikes || [])
+    .map((strike) => formatNumber(strike, Number.isInteger(Number(strike)) ? 0 : 2))
+    .join(", ");
+  const liveStrikes = (row.iv_expansion_live_strikes || [])
+    .map((strike) => formatNumber(strike, Number.isInteger(Number(strike)) ? 0 : 2))
+    .join(", ");
+  const fallbackSessions = Number(row.iv_expansion_fallback_sessions) || 0;
+  const referenceLabel = row.iv_expansion_reference_status === "fallback"
+    ? "Fallback " + (row.iv_expansion_reference_session || "snapshot")
+    : "Yesterday";
+  const provenance = fallbackSessions > 0
+    ? "Fallback " + fallbackSessions + (fallbackSessions === 1 ? " session" : " sessions")
+    : status;
+  const methodology = hasValue
+    ? referenceLabel + " " + formatNumber(row.iv_expansion_reference_iv_pct, 2)
+      + "% IV at strikes " + (referenceStrikes || "--") + ". " + status + " "
+      + formatNumber(row.iv_expansion_live_iv_pct, 2)
+      + "% IV at moneyness-matched strikes " + (liveStrikes || "--") + "."
+      + (row.iv_expansion_observation_session
+        ? " Observation session " + row.iv_expansion_observation_session + "."
+        : "")
+    : "Waiting for fresh same-expiry call and put quotes at the reference moneyness points.";
+
+  return '<td class="iv-expansion-cell ' + (hasValue ? "" : "waiting")
+    + '" title="' + escapeHtml(methodology) + '">'
+    + '<span class="iv-expansion-primary"><span class="iv-expansion-value">'
+    + (hasValue ? formatSigned(value, 1, "%") : "--") + '</span>'
+    + '<span class="iv-bucket-badge term-tip ' + (scored ? "scored" : "")
+    + '" tabindex="0" aria-label="' + (scored ? "Bucket sigma " + scoreLabel : "Bucket sigma unavailable") + '" data-tooltip="' + escapeHtml(scoreTip) + '">'
+    + scoreLabel + (scored && bucketScore.provisional ? "*" : "") + '</span>'
+    + '</span>'
+    + '<span class="iv-expansion-meta">'
+    + (hasValue ? (bucketLabel ? bucketLabel + " · mark " + timestamp : provenance + " · " + timestamp) : "Awaiting options") + "</span></td>";
+}
+
 function rowMarkup(row, viewRank) {
   const width = Math.min(100, Math.max(2, (Math.abs(row.z_score) / 4) * 100));
   const reliability = escapeHtml(row.iv_reliability);
@@ -424,11 +502,13 @@ function rowMarkup(row, viewRank) {
           <span class="z-track"><span class="z-bar ${direction}" style="width:${width}%"></span></span>
         </div>
       </td>
+      ${ivExpansionMarkup(row)}
       <td><span class="reliability ${reliability}">${reliability}</span></td>
     </tr>`;
 }
 
 function sortLabel(view = state.view) {
+  if (view === "yesterday") return "saved previous-session rank";
   const settings = state.viewSettings[view];
   const labels = {
     original_rank: "saved rank",
@@ -437,6 +517,7 @@ function sortLabel(view = state.view) {
     gain_pct: "gain",
     sigma_1d_pct: "expected sigma",
     market_cap_usd: "market cap",
+    iv_expansion_pct: "IV expansion",
   };
   return `${labels[settings.sortKey]}, ${settings.sortDirection === "desc" ? "high to low" : "low to high"}`;
 }
@@ -497,7 +578,7 @@ function renderTable(view) {
 
   table.rows.innerHTML = rows.map((row, index) => rowMarkup(
     row,
-    view === "yesterday" && settings.sortKey === "original_rank"
+    view === "yesterday"
       ? row.original_rank
       : pagination.offset + index + 1,
   )).join("");
@@ -511,7 +592,7 @@ function renderTable(view) {
       : observedRows > 0
       ? `${observedRows} of ${payload.rows.length} current-session prices · ranked by ${sortLabel(view)}`
       : `No current-session prices yet · showing ${formatDate(payload.data_date)} closing snapshot · ranked by ${sortLabel(view)}`
-    : `Fixed 20-name list · ranked by ${sortLabel(view)}`;
+    : `Fixed 20-name list · fixed in ${sortLabel(view)} order`;
   table.horizonLine.textContent = expectedSigmaNote(payload);
   if (view === "today") {
     elements.todayPagination.hidden = pagination.totalPages <= 1;
@@ -551,9 +632,6 @@ function render() {
     ? `Today's return anchor: ${formatDate(payload.anchor_date)} close`
     : `Saved screen anchor: ${formatDate(payload.anchor_date)} close`;
   elements.ivNote.textContent = `${expectedSigmaNote(payload)} · Expiry ${formatDate(payload.option_expiry)}`;
-  elements.absoluteRank.hidden = state.view !== "today";
-  elements.savedRank.hidden = state.view !== "yesterday";
-
   document.querySelectorAll(".sort-button").forEach((button) => {
     const buttonView = button.closest(".table-panel")?.id === "panel-today" ? "today" : "yesterday";
     const settings = state.viewSettings[buttonView];
@@ -561,6 +639,9 @@ function render() {
     button.dataset.direction = button.dataset.sort === settings.sortKey ? settings.sortDirection : "";
   });
   document.querySelectorAll(".rank-button").forEach((button) => {
+    button.hidden = button.dataset.sort === "original_rank"
+      ? state.view !== "yesterday"
+      : state.view !== "today" && button.dataset.sort !== "original_rank";
     button.classList.toggle("active", button.dataset.sort === activeSettings().sortKey);
   });
   document.querySelectorAll(".view-button").forEach((button) => {
@@ -586,6 +667,7 @@ function queueRender() {
 }
 
 function setSort(sortKey) {
+  if (state.view === "yesterday") return;
   const settings = activeSettings();
   if (settings.sortKey === sortKey) {
     settings.sortDirection = settings.sortDirection === "desc" ? "asc" : "desc";
@@ -620,6 +702,30 @@ function applyLivePrice(point, tradingDate) {
   );
 }
 
+function applyIvExpansion(point) {
+  if (!point || !point.ticker) return false;
+  state.live.ivExpansions.set(point.ticker, point);
+  const row = (state.rowsByTicker.get(point.ticker) || [])
+    .find((candidate) => candidate.dashboard_view === "today");
+  if (!row) return false;
+  row.iv_expansion_pct = Number(point.iv_expansion_pct);
+  row.iv_expansion_level = Number(point.iv_expansion_level);
+  row.iv_expansion_bucket_score = point.iv_expansion_bucket_score || null;
+  row.iv_expansion_status = point.status;
+  row.iv_expansion_timestamp = point.last_valid_at;
+  row.iv_expansion_reference_iv_pct = Number(point.reference_annualized_iv_pct);
+  row.iv_expansion_live_iv_pct = Number(point.live_annualized_iv_pct);
+  row.iv_expansion_reference_strikes = point.reference_strikes || [];
+  row.iv_expansion_live_strikes = point.live_strikes || [];
+  row.iv_expansion_moneyness_match_error = Number(point.moneyness_match_max_error);
+  row.iv_expansion_reference_session = point.iv_reference_session || null;
+  row.iv_expansion_observation_session = point.iv_observation_session || null;
+  row.iv_expansion_reference_status = point.iv_reference_status || "yesterday";
+  row.iv_expansion_fallback_sessions = Number(point.fallback_sessions) || 0;
+  row.iv_expansion_baseline_revision = Number(point.baseline_revision) || 1;
+  return true;
+}
+
 function applyLivePriceToRow(row, point) {
   const regularClose = point.regular_close;
   const carriesCompletedClose = window.SigmaMath.isCompletedSessionCarry(
@@ -632,8 +738,15 @@ function applyLivePriceToRow(row, point) {
   const stalePremarketAnchor = state.live.marketSession === "premarket"
     && regularClose?.trading_date
     && regularClose.trading_date !== row.payload_anchor_date;
+  const reopeningOvernight = window.SigmaMath.isReopeningOvernight(
+    row.dashboard_view, row.payload_anchor_date, state.refreshPlan?.next_session,
+    state.live.marketSession, point,
+  );
+  // Ignore stale or previous-session ticks once this reopening is live.
+  if (row.reopening_overnight && state.live.marketSession === "overnight"
+      && !reopeningOvernight) return false;
   const usesTodayCompletedClose = row.dashboard_view === "today" && (
-      window.SigmaMath.isPostCloseSession(state.live.marketSession)
+      (window.SigmaMath.isPostCloseSession(state.live.marketSession) && !reopeningOvernight)
       || stalePremarketAnchor
   );
   const usesSavedListCompletedClose = row.dashboard_view === "yesterday"
@@ -658,6 +771,7 @@ function applyLivePriceToRow(row, point) {
   const metrics = window.SigmaMath.calculateLiveMetrics(metricPrice, anchor, row.sigma_1d_pct);
   if (!metrics) return false;
 
+  row.reopening_overnight = reopeningOvernight;
   row.last_price = Number(metricPrice);
   row.gain_pct = metrics.gainPct;
   row.log_return_pct = metrics.logReturnPct;
@@ -724,10 +838,15 @@ function handlePriceMessage(message) {
     state.viewSettings.today.page = 1;
   }
   state.live.dataDate = message.trading_date || state.live.dataDate;
-  const changed = message.prices.reduce((count, point) => {
+  const priceChanges = message.prices.reduce((count, point) => {
     state.live.points.set(point.ticker, point);
     return count + Number(applyLivePrice(point, message.trading_date));
   }, 0);
+  const ivChanges = (message.iv_expansions || []).reduce(
+    (count, point) => count + Number(applyIvExpansion(point)),
+    0,
+  );
+  const changed = priceChanges + ivChanges;
   state.live.pricesReceived = [...state.rowsByTicker.values()]
     .filter((rows) => rows.some((row) => row.price_source))
     .length;
@@ -881,6 +1000,7 @@ function initializeRows(payload, view) {
       row.regular_trading_date = payload.data_date;
       row.regular_is_live = false;
       row.holding_completed_close = false;
+      row.reopening_overnight = false;
       row.regular_gain_pct = window.SigmaMath.primaryGainPct(
         view,
         row,
@@ -895,17 +1015,33 @@ function initializeRows(payload, view) {
       row.price_session = "snapshot";
       row.price_trading_date = payload.data_date;
       row.price_stale = false;
+      row.iv_expansion_pct = null;
+      row.iv_expansion_level = 0;
+      row.iv_expansion_bucket_score = null;
+      row.iv_expansion_status = "waiting";
+      row.iv_expansion_timestamp = null;
+      row.iv_expansion_reference_iv_pct = null;
+      row.iv_expansion_live_iv_pct = null;
+      row.iv_expansion_reference_strikes = [];
+      row.iv_expansion_live_strikes = [];
+      row.iv_expansion_reference_session = null;
+      row.iv_expansion_observation_session = null;
+      row.iv_expansion_reference_status = null;
+      row.iv_expansion_fallback_sessions = 0;
+      row.iv_expansion_baseline_revision = null;
   });
 }
 
 function applyDashboardState(bundle, changed) {
   const initial = !state.payload;
   state.cache = bundle.cache || null;
+  state.refreshPlan = bundle.refresh_plan;
   if (changed.yesterday) {
     state.payload = bundle.snapshot;
     initializeRows(state.payload, "yesterday");
   }
   if (changed.today) {
+    state.live.ivExpansions.clear();
     state.todayPayload = bundle.today;
     initializeRows(state.todayPayload, "today");
   }
@@ -921,6 +1057,10 @@ function applyDashboardState(bundle, changed) {
     const point = state.live.points.get(row.ticker);
     if (point && window.SigmaMath.isPriceForTradingDate(point.trading_date, state.live.dataDate)) {
       applyLivePriceToRow(row, point);
+    }
+    if (row.dashboard_view === "today") {
+      const ivExpansion = state.live.ivExpansions.get(row.ticker);
+      if (ivExpansion) applyIvExpansion(ivExpansion);
     }
   }
   if (changed[state.view]) {

@@ -1,0 +1,10 @@
+[Unit]
+Description=Prepare Today movers for reopening after weekends and holidays
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/sigma-tape/current/deploy/refresh-production.sh reopening
+TimeoutStartSec=90min

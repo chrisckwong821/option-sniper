@@ -30,7 +30,7 @@ except ImportError:  # Support direct execution with `python scripts/...`.
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CACHE_ROOT = ROOT / ".cache" / "sigma-tape"
 DEFAULT_STATE_CACHE = DEFAULT_CACHE_ROOT / "dashboard-state.json"
-SCREENING_POLICY_VERSION = "mcap5b-nearest-weekly-7d-v1"
+SCREENING_POLICY_VERSION = "mcap5b-nearest-weekly-7d-moneyness-ivexp-v2"
 NASDAQ_SCREENER_URL = (
     "https://api.nasdaq.com/api/screener/stocks"
     "?tableonly=true&limit=10000&offset=0&download=true"
@@ -77,6 +77,12 @@ def screening_policy(settings: RefreshSettings | None = None) -> dict[str, Any]:
         },
         "requires_mathematically_valid_option_iv": True,
         "risk_free_rate_annual_decimal": 0.04,
+        "iv_expansion_reference": {
+            "model": "discounted Black-76 on the option-implied forward",
+            "strike_matching": "same log-moneyness targets; current strikes may differ",
+            "maximum_reference_strikes": 5,
+            "maximum_absolute_log_moneyness": 0.075,
+        },
     }
 
 
@@ -295,12 +301,6 @@ def refresh_dashboard_state(
     settings: RefreshSettings | None = None,
 ) -> dict[str, Any]:
     """Run one bounded historical screen and return both dashboard views."""
-    spot_key, option_key = resolve_historical_api_keys()
-    if not spot_key or not option_key:
-        raise RuntimeError(
-            "Historical refresh requires DATABENTO_LIVE_API_KEY and "
-            "DATABENTO_OPTIONS_API_KEY"
-        )
 
     config = settings or RefreshSettings()
     validate_expiry_horizon(plan, config)
@@ -308,11 +308,14 @@ def refresh_dashboard_state(
     universe_path = work / "nasdaq-universe.json"
     screen_path = work / "screen.json"
     option_cache = work / "option-quotes"
-    fetch_nasdaq_universe(universe_path)
+    from scripts.shared_cache import SharedCache
+    if not SharedCache(cache_root).restore_file(universe_path):
+        fetch_nasdaq_universe(universe_path)
+        SharedCache(cache_root).put("history/" + universe_path.resolve().relative_to(cache_root.resolve()).as_posix(), universe_path)
 
     command = [
         sys.executable,
-        str(ROOT / "scripts" / "nasdaq_universe_movers.py"),
+        "-m", "scripts.nasdaq_universe_movers",
         "--universe", str(universe_path),
         "--output", str(screen_path),
         "--window-start", plan.prior_session,
@@ -343,6 +346,7 @@ def refresh_dashboard_state(
         check=False,
         capture_output=True,
         text=True,
+        env={**os.environ, "SIGMA_CACHE_ROOT": str(cache_root.resolve())},
     )
     if result.returncode:
         detail = (result.stderr or result.stdout).strip()[-2000:]
@@ -398,6 +402,28 @@ def build_mock_bundle(
             "sigma_1d_pct": sigma,
             "annualized_implied_vol_pct": sigma * (365 ** 0.5),
             "iv_reliability": reliabilities[index % len(reliabilities)],
+            "iv_expansion_reference": {
+                "method": "moneyness-matched-black76-v1",
+                "annualized_implied_vol_pct": sigma * (365 ** 0.5),
+                "spot_price": price,
+                "forward_price": price,
+                "strikes": [
+                    round(price * factor, 2)
+                    for factor in (0.96, 0.98, 1.0, 1.02, 1.04)
+                ],
+                "log_moneyness": [
+                    math.log(factor)
+                    for factor in (0.96, 0.98, 1.0, 1.02, 1.04)
+                ],
+                "option_expiry": plan.option_expiry,
+                "observation_time": plan.option_valuation_time,
+                "requested_session": plan.completed_session,
+                "reference_session": plan.prior_session,
+                "reference_status": "fallback",
+                "fallback_sessions": 1,
+                "baseline_revision": 1,
+            },
+            "iv_chain": {"occ_root": None, "strikes": []},
             "outside_one_sigma": abs(prior_z) > 1,
             "prior_session_date": plan.prior_session,
             "prior_session_gain_pct": prior_gain,
@@ -526,6 +552,10 @@ class DashboardStateManager:
                 "generated-mock",
             )
 
+        from scripts.reconstruction_budget import start_run
+        from scripts.shared_cache import SharedCache
+        if SharedCache(self.cache_path.parent).enabled:
+            start_run(self.cache_path.parent, plan.completed_session)
         cached = self.load_cache()
         fresh = bool(
             cached
@@ -535,6 +565,21 @@ class DashboardStateManager:
             == self.expected_policy_fingerprint
             and has_complete_prior_session_metrics(cached, plan)
         )
+        from scripts.computed_cache import restore as restore_computed
+        from scripts.shared_cache import SharedCacheError
+        try:
+            if not fresh:
+                if restore_computed(self.cache_path.parent, plan.completed_session, self.expected_policy_fingerprint):
+                    cached = self.load_cache()
+                    if cached:
+                        return self._with_runtime_cache(cached, plan, "fresh", "s3")
+            elif any(not (self.cache_path.parent / name).exists() for name in (
+                "live-iv-expansion.json", "iv-expansion-statistics-session-batch.json")):
+                restore_computed(self.cache_path.parent, plan.completed_session, self.expected_policy_fingerprint, include_state=False)
+        except SharedCacheError as exc:
+            if cached:
+                return self._with_runtime_cache(cached, plan, "fresh" if fresh else "stale", "cache-fallback", str(exc))
+            raise
         if fresh and mode != "force":
             return self._with_runtime_cache(cached, plan, "fresh", "cache")
         if mode == "never":
@@ -555,6 +600,12 @@ class DashboardStateManager:
             ):
                 raise ValueError("Refresh did not use the expected screening policy")
             atomic_write_json(self.cache_path, refreshed)
+            from scripts.computed_cache import publish
+            try:
+                publish(self.cache_path.parent)
+            except Exception as exc:
+                return self._with_runtime_cache(refreshed, plan, "fresh", "refresh",
+                                                f"Computed cache upload failed: {exc}")
             return self._with_runtime_cache(refreshed, plan, "fresh", "refresh")
         except Exception as exc:
             if cached:

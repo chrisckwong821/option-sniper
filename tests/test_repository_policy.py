@@ -78,6 +78,8 @@ class RepositoryPolicyTests(unittest.TestCase):
             "DATABENTO_API_KEY",
             "DATABENTO_LIVE_API_KEY",
             "DATABENTO_OPTIONS_API_KEY",
+            "DATABENTO_LIVE_OPTIONS_API_KEY",
+            "DATABENTO_HISTORICAL_OPTIONS_API_KEY",
         ):
             self.assertNotIn(variable, content)
 

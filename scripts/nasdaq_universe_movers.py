@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+from datetime import date
 from pathlib import Path
 
 import databento as db
@@ -16,8 +17,12 @@ from databento.common.error import BentoServerError
 
 try:
     from .databento_config import resolve_historical_api_keys
+    from .historical_cache import HistoricalCache
+    from .shared_cache import SharedCache
 except ImportError:  # Support direct execution with `python scripts/...`.
     from databento_config import resolve_historical_api_keys
+    from historical_cache import HistoricalCache
+    from shared_cache import SharedCache
 
 
 RISK_FREE_RATE = 0.04
@@ -128,10 +133,34 @@ def load_universe(path, market_cap_min):
 
 def fetch_spot(client, symbols, start, end, dataset, max_cost):
     schema = "ohlcv-1m" if dataset == "EQUS.MINI" else "ohlcv-1d"
+    requested_symbols = set(symbols)
+    use_all_symbols = dataset == "EQUS.SUMMARY" and len(symbols) >= 500
+    instrument_symbols = {}
+    request_symbols = symbols
+    request_stype = "raw_symbol"
+    if use_all_symbols:
+        resolution = client.symbology.resolve(
+            dataset=dataset,
+            symbols="ALL_SYMBOLS",
+            stype_in="raw_symbol",
+            stype_out="instrument_id",
+            start_date=str(pd.Timestamp(start).date()),
+            end_date=str(pd.Timestamp(end).date()),
+        )
+        for raw_symbol, intervals in resolution.get("result", {}).items():
+            if raw_symbol not in requested_symbols:
+                continue
+            for interval in intervals:
+                try:
+                    instrument_symbols[int(interval["s"])] = raw_symbol
+                except (KeyError, TypeError, ValueError):
+                    continue
+        request_symbols = "ALL_SYMBOLS"
+
     request = {
         "dataset": dataset,
-        "symbols": symbols,
-        "stype_in": "raw_symbol",
+        "symbols": request_symbols,
+        "stype_in": request_stype,
         "schema": schema,
         "start": start,
         "end": end,
@@ -142,6 +171,7 @@ def fetch_spot(client, symbols, start, end, dataset, max_cost):
         "dataset": dataset,
         "schema": schema,
         "symbol_count": len(symbols),
+        "retrieval": "all_symbols_local_filter" if use_all_symbols else "requested_symbols",
         "estimated_cost_usd": cost,
         "maximum_cost_usd": max_cost,
     }), flush=True)
@@ -150,6 +180,9 @@ def fetch_spot(client, symbols, start, end, dataset, max_cost):
             f"Estimated spot cost ${cost:.4f} exceeds --max-spot-cost ${max_cost:.4f}"
         )
     bars = client.timeseries.get_range(**request).to_df().reset_index()
+    if use_all_symbols:
+        bars["symbol"] = bars["instrument_id"].map(instrument_symbols)
+        bars = bars.loc[bars["symbol"].notna()].copy()
     timestamp_col = bars.columns[0]
     timestamps = pd.to_datetime(bars[timestamp_col], utc=True)
     if dataset == "EQUS.MINI":
@@ -316,6 +349,24 @@ def fetch_option_pairs(
     }
     chunk_count = math.ceil(len(candidates) / chunk_size)
     chunks = [candidates[index::chunk_count] for index in range(chunk_count)]
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def chunk_cache_path(chunk_candidates):
+        chunk_parents = [f"{row['ticker']}.OPT" for row in chunk_candidates]
+        cache_key = hashlib.sha256(json.dumps({
+            "dataset": "OPRA.PILLAR",
+            "schema": "cbbo-1m",
+            "start": snapshot_start,
+            "end": snapshot_end,
+            "expiry": str(option_expiry),
+            "parents": chunk_parents,
+        }, sort_keys=True).encode()).hexdigest()[:16]
+        path = cache_dir / f"chunk-{cache_key}.json"
+        shared = getattr(client, "shared", None)
+        if shared:
+            shared.restore_file(path)
+        return path
+
     if known_cost is not None:
         cost = known_cost
         print(json.dumps({
@@ -349,6 +400,16 @@ def fetch_option_pairs(
         chunk_costs = []
         for chunk_number, chunk_candidates in enumerate(chunks, start=1):
             chunk_parents = [f"{row['ticker']}.OPT" for row in chunk_candidates]
+            if chunk_cache_path(chunk_candidates).exists():
+                chunk_costs.append(0.0)
+                print(json.dumps({
+                    "stage": "option_chunk_cost_preflight_skipped",
+                    "chunk": chunk_number,
+                    "chunk_count": chunk_count,
+                    "parent_symbol_count": len(chunk_parents),
+                    "reason": "cached",
+                }), flush=True)
+                continue
             chunk_cost = estimate_chunk_cost(chunk_parents, str(chunk_number))
             chunk_costs.append(chunk_cost)
             print(json.dumps({
@@ -370,22 +431,13 @@ def fetch_option_pairs(
         raise RuntimeError(
             f"Estimated OPRA cost ${cost:.4f} exceeds --max-option-cost ${max_cost:.4f}"
         )
-    cache_dir.mkdir(parents=True, exist_ok=True)
     all_pairs = {}
     diagnostics = {"unparsed_records": 0, "wrong_expiry_records": 0, "invalid_quote_records": 0}
     total_records = 0
 
     def load_chunk(chunk_candidates, chunk_label):
         chunk_parents = [f"{row['ticker']}.OPT" for row in chunk_candidates]
-        cache_key = hashlib.sha256(json.dumps({
-            "dataset": "OPRA.PILLAR",
-            "schema": "cbbo-1m",
-            "start": snapshot_start,
-            "end": snapshot_end,
-            "expiry": str(option_expiry),
-            "parents": chunk_parents,
-        }, sort_keys=True).encode()).hexdigest()[:16]
-        cache_path = cache_dir / f"chunk-{cache_key}.json"
+        cache_path = chunk_cache_path(chunk_candidates)
         if cache_path.exists():
             payload = json.loads(cache_path.read_text())
             return (
@@ -432,6 +484,9 @@ def fetch_option_pairs(
             "diagnostics": chunk_diagnostics,
             "pairs_by_ticker": chunk_pairs,
         }) + "\n")
+        shared = getattr(client, "shared", None)
+        if shared and cache_path.resolve().is_relative_to(shared.root):
+            shared.put("history/" + cache_path.resolve().relative_to(shared.root).as_posix(), cache_path)
         return chunk_pairs, chunk_diagnostics, record_count, source
 
     for chunk_number, chunk_candidates in enumerate(chunks, start=1):
@@ -463,8 +518,12 @@ def parse_occ_symbol(symbol):
     if tail[6] not in {"C", "P"} or not (tail[:6] + tail[7:]).isdigit():
         return None
     try:
-        expiry = pd.to_datetime(tail[:6], format="%y%m%d").date()
-    except ValueError:
+        expiry = date(
+            2000 + int(tail[:2]),
+            int(tail[2:4]),
+            int(tail[4:6]),
+        )
+    except (TypeError, ValueError):
         return None
     return {
         "root": raw[:-15].strip(),
@@ -576,7 +635,61 @@ def prepare_option_pairs(quotes, candidates, option_expiry):
     return pairs_by_ticker, diagnostics
 
 
-def estimate_option_iv(candidate, pairs, year_fraction):
+def select_iv_pairs(
+    pairs,
+    forward,
+    moneyness_targets=None,
+    *,
+    max_strikes=5,
+    max_abs_log_moneyness=0.075,
+    max_match_error=0.02,
+):
+    eligible = [
+        pair
+        for pair in pairs
+        if abs(math.log(pair["strike"] / forward)) <= max_abs_log_moneyness
+    ]
+    if not moneyness_targets:
+        return [
+            {
+                "pair": pair,
+                "target_log_moneyness": None,
+                "match_error": 0.0,
+            }
+            for pair in sorted(
+                eligible,
+                key=lambda pair: abs(math.log(pair["strike"] / forward)),
+            )[:max_strikes]
+        ]
+
+    targets = sorted(
+        float(target)
+        for target in moneyness_targets
+        if math.isfinite(float(target))
+        and abs(float(target)) <= max_abs_log_moneyness
+    )[:max_strikes]
+    available = list(eligible)
+    matched = []
+    for target in targets:
+        if not available:
+            break
+        pair = min(
+            available,
+            key=lambda item: abs(math.log(item["strike"] / forward) - target),
+        )
+        actual = math.log(pair["strike"] / forward)
+        error = abs(actual - target)
+        if error <= max_match_error:
+            available.remove(pair)
+            matched.append({
+                "pair": pair,
+                "target_log_moneyness": target,
+                "match_error": error,
+            })
+    return matched
+
+
+def estimate_option_iv(candidate, pairs, year_fraction, moneyness_targets=None):
     spot = candidate["anchor_price"]
     discount_factor = math.exp(-RISK_FREE_RATE * year_fraction)
     near_spot = [pair for pair in pairs if 0.8 * spot <= pair["strike"] <= 1.2 * spot]
@@ -596,11 +709,14 @@ def estimate_option_iv(candidate, pairs, year_fraction):
         [item[1] for item in forward_inputs],
     )
 
-    near_forward = sorted(near_spot, key=lambda pair: abs(math.log(pair["strike"] / forward)))
+    selected_pairs = select_iv_pairs(
+        near_spot,
+        forward,
+        moneyness_targets,
+    )
     estimates = []
-    for pair in near_forward[:5]:
-        if abs(math.log(pair["strike"] / forward)) > 0.075:
-            continue
+    for selection in selected_pairs:
+        pair = selection["pair"]
         straddle_mid = pair["call"]["mid"] + pair["put"]["mid"]
         total_vol = implied_total_vol(
             forward,
@@ -619,6 +735,9 @@ def estimate_option_iv(candidate, pairs, year_fraction):
             "put": pair["put"],
             "straddle_mid": straddle_mid,
             "relative_total_spread": total_spread / straddle_mid if straddle_mid > 0 else math.inf,
+            "log_moneyness": math.log(pair["strike"] / forward),
+            "target_log_moneyness": selection["target_log_moneyness"],
+            "moneyness_match_error": selection["match_error"],
         })
     if not estimates:
         return None
@@ -635,12 +754,34 @@ def estimate_option_iv(candidate, pairs, year_fraction):
         quality = "medium"
     else:
         quality = "low"
+    ordered_estimates = sorted(estimates, key=lambda item: item["log_moneyness"])
 
     return {
         "forward_price": forward,
         "forward_vs_spot_pct": 100 * (forward / spot - 1),
         "forward_input_strikes": len(forward_inputs),
         "iv_input_strikes": len(estimates),
+        "iv_input_strike_values": [item["strike"] for item in ordered_estimates],
+        "iv_input_log_moneyness": [item["log_moneyness"] for item in ordered_estimates],
+        "iv_target_log_moneyness": [
+            item["target_log_moneyness"]
+            for item in ordered_estimates
+            if item["target_log_moneyness"] is not None
+        ],
+        "iv_moneyness_match_max_error": max(
+            (item["moneyness_match_error"] for item in ordered_estimates),
+            default=0.0,
+        ),
+        "iv_chain_strikes": sorted({pair["strike"] for pair in near_spot}),
+        "iv_occ_root": next(
+            (
+                parsed["root"]
+                for pair in near_spot
+                for parsed in [parse_occ_symbol(pair["call"].get("raw_symbol", ""))]
+                if parsed is not None
+            ),
+            None,
+        ),
         "risk_free_rate_pct": 100 * RISK_FREE_RATE,
         "discount_factor": discount_factor,
         "annualized_implied_vol_pct": 100 * total_vol / math.sqrt(year_fraction),
@@ -748,6 +889,11 @@ def rank_by_implied_move(
             "full_horizon_implied_sigma_pct": estimate["full_horizon_implied_sigma_pct"],
             "annualized_implied_vol_pct": estimate["annualized_implied_vol_pct"],
             "iv_reliability": estimate["iv_reliability"],
+            "iv_reference_forward_price": estimate["forward_price"],
+            "iv_reference_strikes": estimate["iv_input_strike_values"],
+            "iv_reference_log_moneyness": estimate["iv_input_log_moneyness"],
+            "iv_chain_strikes": estimate["iv_chain_strikes"],
+            "iv_occ_root": estimate["iv_occ_root"],
             "max_abs_implied_path_z": result["max_abs_implied_path_z"],
             "weekly_implied_z": result["weekly_implied_z"],
             "realized_horizon_implied_sigma_pct": result["realized_horizon_implied_sigma_pct"],
@@ -843,12 +989,8 @@ def resolve_run_config(args):
 
 def create_historical_clients(environ=None):
     spot_api_key, option_api_key = resolve_historical_api_keys(environ)
-    if not spot_api_key or not option_api_key:
-        raise RuntimeError(
-            "Set DATABENTO_LIVE_API_KEY and DATABENTO_OPTIONS_API_KEY "
-            "(legacy DATABENTO_API_KEY remains supported)"
-        )
-    return db.Historical(spot_api_key), db.Historical(option_api_key)
+    return (HistoricalCache(spot_api_key, client=db.Historical(spot_api_key) if spot_api_key else None),
+            HistoricalCache(option_api_key, client=db.Historical(option_api_key) if option_api_key else None))
 
 
 def main():

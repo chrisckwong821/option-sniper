@@ -109,6 +109,13 @@
       || payloadAnchorDate === targetCompletedSession;
   }
 
+  function isReopeningOvernight(view, anchorDate, nextSession, marketSession, point) {
+    return view === "today" && marketSession === "overnight"
+      && point?.session === "overnight" && !point.is_stale
+      && point.trading_date === nextSession
+      && (Date.parse(nextSession) - Date.parse(anchorDate)) / 86400000 > 1;
+  }
+
   function isPostCloseSession(session) {
     return ["afterhours", "overnight", "closed"].includes(session);
   }
@@ -199,6 +206,7 @@
     isLiveGainSession,
     isNewerPrice,
     isPostCloseSession,
+    isReopeningOvernight,
     isPriceForTradingDate,
     paginateRows,
     premarketTradePriority,

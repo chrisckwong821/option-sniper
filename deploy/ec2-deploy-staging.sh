@@ -50,7 +50,7 @@ sudo install -d -o 10001 -g 10001 -m 0750 "$staging_cache"
 # Staging receives market-data credentials but never the production Discord token.
 environment_temp="$(sudo mktemp /etc/sigma-tape/.sigma-tape-staging.env.XXXXXX)"
 sudo grep -E \
-  '^(DATABENTO_(API_KEY|LIVE_API_KEY|SPOT_API_KEY|LIVE_OPTION_API_KEY|LIVE_OPTIONS_API_KEY|HISTORICAL_OPTION_API_KEY|HISTORICAL_OPTIONS_API_KEY|OPTION_API_KEY|OPTIONS_API_KEY))=' \
+  '^(DATABENTO_(API_KEY|LIVE_API_KEY|SPOT_API_KEY|LIVE_OPTION_API_KEY|LIVE_OPTIONS_API_KEY|HISTORICAL_OPTION_API_KEY|HISTORICAL_OPTIONS_API_KEY|OPTION_API_KEY|OPTIONS_API_KEY)|SIGMA_(S3_BUCKET|S3_REGION|S3_PREFIX|RECONSTRUCTION_MAX_COST))=' \
   "$production_environment" | sudo tee "$environment_temp" >/dev/null || true
 printf '%s\n' \
   'SIGMA_ALLOWED_ORIGINS=https://staging.optionsniper.xyz' \

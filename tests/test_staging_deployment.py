@@ -25,6 +25,8 @@ class StagingDeploymentTests(unittest.TestCase):
         self.assertIn("http://127.0.0.1:8766/api/health", deployer)
         self.assertNotIn("docker compose -f deploy/compose.yml", deployer)
         self.assertNotIn("systemctl", deployer)
+        self.assertIn("S3_BUCKET|S3_REGION|S3_PREFIX|RECONSTRUCTION_MAX_COST", deployer)
+        self.assertNotIn("SIGMA_AWS_PROFILE", deployer)
 
     def test_workflow_uses_the_staging_environment(self):
         workflow = (ROOT / ".github/workflows/deploy-staging.yml").read_text()

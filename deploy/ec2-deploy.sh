@@ -138,6 +138,11 @@ sudo install -o root -g root -m 0644 \
   "$release/deploy/option-sniper-yesterday-refresh.timer" \
   /etc/systemd/system/option-sniper-yesterday-refresh.timer
 sudo systemctl daemon-reload
+sudo install -m 0644 "$release/deploy/option-sniper-reopening-refresh.service" /etc/systemd/system/option-sniper-reopening-refresh.service
+sudo install -m 0644 "$release/deploy/option-sniper-reopening-refresh.timer" /etc/systemd/system/option-sniper-reopening-refresh.timer
+sudo systemctl daemon-reload
+sudo systemctl enable option-sniper-reopening-refresh.timer
+sudo systemctl restart option-sniper-reopening-refresh.timer
 sudo systemctl enable --now option-sniper-refresh.timer
 sudo systemctl enable option-sniper-yesterday-refresh.timer
 sudo systemctl restart option-sniper-yesterday-refresh.timer

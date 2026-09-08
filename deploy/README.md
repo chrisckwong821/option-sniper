@@ -36,7 +36,8 @@ sudo install -o root -g root -m 0600 /dev/null /etc/sigma-tape/sigma-tape.env
 sudoedit /etc/sigma-tape/sigma-tape.env
 ```
 
-It must define `DATABENTO_LIVE_API_KEY`, `DATABENTO_OPTIONS_API_KEY`, and a
+It must define `DATABENTO_LIVE_API_KEY`, `DATABENTO_LIVE_OPTIONS_API_KEY`,
+`DATABENTO_HISTORICAL_OPTIONS_API_KEY`, and a
 rotated `DISCORD_BOT_TOKEN`. `DISCORD_CHANNEL_ID` defaults to the production
 alert channel and `ZSCORE_ALERT_THRESHOLD` defaults to `1.0`; either can be
 overridden in this file.
@@ -143,3 +144,25 @@ The GitHub `production` environment must define these encrypted secrets:
 
 Historical and live Databento keys remain in
 `/etc/sigma-tape/sigma-tape.env`; they are not GitHub deployment secrets.
+
+## Reopening after weekends and holidays
+
+`option-sniper-reopening-refresh.timer` checks daily at 19:45 ET, with retries
+at 20:00, 20:15, and 20:45 ET. The refresh command uses the exchange calendar:
+it only proceeds on the evening immediately before a trading session whose
+previous trading session is more than one calendar day earlier. Ordinary
+weekday evenings and evenings before holidays are no-ops.
+
+The first check prepares the latest completed-session cache before Blue Ocean
+opens at 20:00 ET (09:00 JST in daylight saving time, 10:00 JST in winter).
+A valid current cache avoids historical downloads and backend restarts. Failed
+refreshes retain the published cache. The existing pre-market timer remains
+unchanged and provides a fallback. Reopening refreshes recreate only the backend;
+the Discord worker and its pre-market alert-cycle policy remain unchanged.
+
+During that reopening overnight session, Today uses fresh trades for live Z-score
+ranking against the last completed-session anchor. Stale trades and trades for
+other session dates do not activate the exception. Yesterday's saved display and
+ordinary weekday overnight carry behavior are preserved. Live activation depends
+on receiving a fresh overnight trade; preparing a cache alone does not create
+live prices. The new timer is installed by the deployment script.

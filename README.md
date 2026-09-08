@@ -29,11 +29,13 @@ contract is eligible from the prior Friday close.
 
 The historical screen uses consolidated `EQUS.SUMMARY` daily bars for closing
 prices. Live equity prices remain on `EQUS.MINI`. Both route through
-`DATABENTO_LIVE_API_KEY`; historical OPRA access uses
-`DATABENTO_OPTIONS_API_KEY`. The IV denominator is a prior-close option snapshot,
-not historical volatility. Option Sniper infers the forward from paired call-put
-mids and applies discounted Black-76 with a hard-coded 4% continuously
-compounded annual risk-free rate.
+`DATABENTO_LIVE_API_KEY`; live and historical OPRA access use the independent
+`DATABENTO_LIVE_OPTIONS_API_KEY` and
+`DATABENTO_HISTORICAL_OPTIONS_API_KEY` credentials. The legacy
+`DATABENTO_OPTIONS_API_KEY` remains a shared fallback. The IV denominator is an
+option snapshot, not historical volatility. Option Sniper infers the forward
+from paired call-put mids and applies discounted Black-76 with a hard-coded 4%
+continuously compounded annual risk-free rate.
 
 Expected sigma scales annualized IV by the actual elapsed close-to-close time
 using `IV * sqrt(elapsed calendar time / 365)`. A Friday-to-Monday trading
@@ -77,7 +79,8 @@ in Git or browser JavaScript.
 
 ```bash
 export DATABENTO_LIVE_API_KEY='...'
-export DATABENTO_OPTIONS_API_KEY='...'
+export DATABENTO_LIVE_OPTIONS_API_KEY='...'
+export DATABENTO_HISTORICAL_OPTIONS_API_KEY='...'
 python -m scripts.live_price_adapter --disable-overnight
 ```
 
@@ -149,6 +152,28 @@ python -m scripts.live_price_adapter --refresh-mode never --disable-overnight
 Use `--disable-overnight` when the live key only covers pre-market, regular, and
 after-hours `EQUS.MINI` data.
 
+## Historical IV-expansion calibration
+
+`scripts/iv_expansion_history.py` builds per-ticker, 30-minute robust IV-change
+distributions. It keeps at least two calendar days to expiry: the front weekly
+is used at 2-4 DTE and the next weekly is used after the Thursday roll. Holiday
+weeks follow the exchange calendar. A ticker without the target weekly uses its
+nearest eligible listed fallback and is calibrated in a separate tenor class.
+
+Contract definitions are captured once per target-expiry cycle and reused for
+that cycle. The prior close and every intraday bucket still use the historical
+stock price to select moneyness-matched call/put strikes. Raw Databento responses
+are content-addressed in the local cache, so exact reruns do not repurchase data.
+Low-reliability current marks receive a provisional score against the clean
+reliable baseline; low-reliability history is excluded unless explicitly enabled.
+
+Batch calibration is session-centric: each stock session and each expiry-cycle
+contract catalogue is loaded once for the full universe. Exact option symbols are
+then split into 1,500-symbol requests and downloaded through three concurrent
+lanes by default. The cost ledger reserves concurrent requests before download,
+so `--max-cost` remains a hard aggregate cap. Computation and SQLite writes stay
+ordered and single-threaded; reruns resume from the content-addressed cache.
+
 ## Security
 
 Only the three frontend assets, `/api/state`, `/api/health`, and `/ws/prices`
@@ -160,3 +185,25 @@ can additionally contain a comma-separated WebSocket origin allowlist.
 This dashboard is a research screen, not investment advice. IV Reliability
 describes quote quality for the sigma denominator; it does not measure forecast
 accuracy or trade execution quality.
+
+## Reopening after weekends and holidays
+
+`option-sniper-reopening-refresh.timer` checks daily at 19:45 ET, with retries
+at 20:00, 20:15, and 20:45 ET. The refresh command uses the exchange calendar:
+it only proceeds on the evening immediately before a trading session whose
+previous trading session is more than one calendar day earlier. Ordinary
+weekday evenings and evenings before holidays are no-ops.
+
+The first check prepares the latest completed-session cache before Blue Ocean
+opens at 20:00 ET (09:00 JST in daylight saving time, 10:00 JST in winter).
+A valid current cache avoids historical downloads and backend restarts. Failed
+refreshes retain the published cache. The existing pre-market timer remains
+unchanged and provides a fallback. Reopening refreshes recreate only the backend;
+the Discord worker and its pre-market alert-cycle policy remain unchanged.
+
+During that reopening overnight session, Today uses fresh trades for live Z-score
+ranking against the last completed-session anchor. Stale trades and trades for
+other session dates do not activate the exception. Yesterday's saved display and
+ordinary weekday overnight carry behavior are preserved. Live activation depends
+on receiving a fresh overnight trade; preparing a cache alone does not create
+live prices. The new timer is installed by the deployment script.
