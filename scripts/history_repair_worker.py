@@ -28,7 +28,7 @@ def main():
     if state['today']['anchor_date'] != plan['iv_session']:
         raise RuntimeError('Shared universe does not cover required completed session')
     service = ExpectedSigma(root)
-    service.sync_shared(plan)
+    service.refresh(state)
     reference_plan, references = closing_references(service)
     if not references:
         raise RuntimeError('No verified closing inputs for bucket references')

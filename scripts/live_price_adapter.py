@@ -1135,21 +1135,14 @@ def create_app(
     history_repair_status = {"state": "external_worker", "error": None}
 
     async def expected_sigma_loop() -> None:
-        from scripts.expected_sigma import next_activation
+        from scripts.expected_sigma import sigma_plan
         while not stop.is_set():
-            now = utc_now()
-            activation = next_activation(now)
-            # Prepare tomorrow independently: failure to repair an older active
-            # snapshot must not prevent saving a close still inside replay.
-            if activation is not None:
-                try:
-                    await asyncio.to_thread(expected_sigma.refresh, state_bundle, now,
-                                            effective_at=activation, regular_prices=dict(store.regular_prices))
-                except Exception:
-                    pass  # Active-session failures below are user-visible.
             try:
-                await asyncio.to_thread(expected_sigma.refresh, state_bundle,
-                                        regular_prices=dict(store.regular_prices))
+                plan = sigma_plan()
+                await asyncio.to_thread(expected_sigma.sync_shared, plan)
+                previous = sigma_plan(datetime.fromisoformat(plan["iv_snapshot_time"]))
+                await asyncio.to_thread(expected_sigma.sync_shared, previous)
+                expected_sigma.error = None
             except Exception as exc:
                 expected_sigma.error = f"{type(exc).__name__}: {exc}"
             try:
@@ -1223,28 +1216,8 @@ def create_app(
                         "connecting",
                         "Discovering listed same-expiry contracts",
                     )
-                    if historical_option_api_key:
-                        try:
-                            option_runtime["catalog"] = await asyncio.to_thread(
-                                fetch_option_contract_catalog,
-                                HistoricalCache(
-                                    historical_option_api_key, root=args.state_cache.parent),
-                                universe["rows"],
-                                as_of_date=universe["anchor_date"],
-                                option_expiry=option_expiry,
-                                cache_path=option_catalog_path,
-                                max_cost=getattr(args, "max_definition_cost", 1.0),
-                            )
-                        except Exception as exc:
-                            option_runtime["catalog_error"] = (
-                                f"{type(exc).__name__}: {exc}"
-                            )
-                    elif option_runtime["catalog"] is None:
-                        option_runtime["catalog_error"] = (
-                            "DATABENTO_HISTORICAL_OPTIONS_API_KEY is not set; "
-                            "using contracts retained in the dashboard snapshot"
-                        )
-
+                    # Serving hosts use retained contracts. Historical discovery
+                    # and bucket reconstruction belong to the dedicated worker.
                     symbols_for_feed = planned_option_symbols()
                     if not symbols_for_feed:
                         store.set_feed_status(
