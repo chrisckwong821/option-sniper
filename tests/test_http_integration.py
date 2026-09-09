@@ -1,8 +1,10 @@
 import argparse
+import math
 import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from aiohttp import WSMsgType
 from aiohttp.client_exceptions import WSServerHandshakeError
@@ -11,6 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from scripts.dashboard_state import atomic_write_json, build_mock_bundle, build_refresh_plan
 from scripts.discord_zscore_alert import build_universe
 from scripts.live_price_adapter import STORE_KEY, create_app
+from scripts.expected_sigma import sigma_plan
 from scripts.websocket_load_test import run as run_websocket_load_test
 from tests.test_dashboard_state import sample_plan
 
@@ -103,6 +106,28 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(set(build_universe(original).rows) <= app[STORE_KEY].symbols)
         finally:
             await client.close()
+
+    async def test_late_sigma_changes_etag_without_restarting_server(self):
+        # The already-started mock feeds remain isolated from provider APIs.
+        self.args.mock = False
+        plan = sigma_plan(datetime(2026, 9, 9, 8, 12, tzinfo=UTC))
+        with patch('scripts.expected_sigma.sigma_plan', return_value=plan):
+            before = await self.client.get('/api/state')
+            pending = await before.json()
+            self.assertEqual(pending['expected_sigma']['status'], 'awaiting_previous_close')
+            rows = {row['ticker']: {'sigma_1d_pct': 2,
+                                   'annualized_implied_vol_pct': 2 / math.sqrt(plan['year_fraction'])}
+                    for row in pending['today']['rows']}
+            atomic_write_json(Path(self.tempdir.name) / 'expected-sigma' / '2026-09-09.json',
+                              {'plan': plan, 'rows': rows})
+            after = await self.client.get('/api/state', headers={'If-None-Match': before.headers['ETag']})
+            self.assertEqual(after.status, 200)
+            ready = await after.json()
+            self.assertEqual(ready['expected_sigma']['status'], 'fresh')
+            for view in ('today', 'snapshot'):
+                self.assertTrue(all(r['sigma_1d_pct'] == 2 for r in ready[view]['rows']))
+            unchanged = await self.client.get('/api/state', headers={'If-None-Match': after.headers['ETag']})
+            self.assertEqual(unchanged.status, 304)
 
     async def test_dirty_symbol_delta_is_shared_across_clients(self):
         args = argparse.Namespace(**vars(self.args))

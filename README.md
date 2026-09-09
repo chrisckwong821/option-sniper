@@ -44,6 +44,36 @@ uses one. The legacy cache field remains `sigma_1d_pct` for compatibility, but
 the dashboard labels the measure `Expected sigma` and exposes the exact horizon
 and formula in its metadata and tooltips.
 
+Both dashboard views now use a shared expected-sigma snapshot. It activates at
+04:00 America/New_York on exchange trading days and remains active through the
+following overnight period. The reference is the previous trading session's
+closing IV; the horizon ends at the active session's close, including holidays
+and early closes. Yesterday's saved gain and ticker list are preserved, while
+its Z-score uses this same current denominator.
+
+The backend prepares the next snapshot after the close and retries pending work
+every minute. With S3 configured, it first restores the session publication from
+`expected-sigma/YYYY-MM-DD.json` under the configured S3 cache prefix. The
+publication contains validated sigma, closing quotes, and verified stock closes;
+it contains no live prices or Z-scores. Conditional S3 writes merge ticker
+coverage safely across instances. Access/checksum errors stop the refresh instead
+of triggering a paid fallback. Only missing inputs after S3/local reuse request a bounded
+OPRA `cbbo-1m` live replay within the last 24 hours, with cost-guarded historical
+fallback when necessary. It accepts quotes only in the final minute through the
+exchange close and computes IV with the existing Black-76 estimator. Live replay
+must complete before its timeout; an incomplete response is never published.
+Live-feed closing stock prices or completed daily snapshots supply the spot
+input, with a bounded historical daily-bar fallback.
+
+Inputs and snapshots live in `.cache/sigma-tape/expected-sigma/`, independently
+of daily list caches and IV-expansion caches. A prepared snapshot cannot activate
+early, including after a restart. A late snapshot activates on the next API
+request; open dashboards discover it with their existing one-minute state poll.
+Until a symbol has valid previous-close IV, both views keep its prior shared
+sigma and display `Awaiting previous-close IV`. Legacy list values are only a
+visibly stale migration fallback. A local process must be restarted once to load
+this code; subsequent sigma rollovers do not require restarting it.
+
 ## Local development
 
 Python 3.11+ and Node 22+ are required.

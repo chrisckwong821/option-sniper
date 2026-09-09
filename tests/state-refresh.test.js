@@ -201,3 +201,69 @@ test("reopening prices rank Today overnight without changing saved gainers or we
   `, context);
   assert.equal(vm.runInContext("state.todayPayload.rows[0].last_price", context), 100);
 });
+
+test("late shared sigma updates both views and reapplies the latest live price", async () => {
+  const element = () => ({ dataset: {}, classList: { toggle() {} },
+    addEventListener() {}, querySelectorAll: () => [], setAttribute() {} });
+  const initial = bundle('2026-09-08', 'LIVE');
+  for (const view of ['snapshot', 'today']) {
+    initial[view].data_date = '2026-09-08';
+    initial[view].anchor_date = '2026-09-08';
+    initial[view].last_update_utc = '2026-09-08T20:00:00Z';
+  }
+  initial.cache.target_completed_session = '2026-09-08';
+  const responses = [response(initial)];
+  const context = vm.createContext({
+    document: { visibilityState: 'visible', querySelector: element,
+      querySelectorAll: () => [], addEventListener() {} },
+    fetch: async () => responses.shift(),
+    WebSocket: class { addEventListener() {} close() {} },
+    requestAnimationFrame: () => {},
+    window: { SigmaMath: require('../dashboard/live-calculations.js'),
+      SigmaStateRefresh: { createLoader }, location: { protocol: 'http:', host: 'localhost' },
+      setInterval() {}, setTimeout() {}, clearTimeout() {}, addEventListener() {} },
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../dashboard/app.js'), 'utf8'), context);
+  vm.runInContext('render = () => {};', context);
+  await vm.runInContext('refreshDashboardState()', context);
+  vm.runInContext(`
+    state.live.marketSession = 'premarket';
+    state.live.dataDate = '2026-09-09';
+    const point = { ticker: 'LIVE', price: 105, session: 'premarket',
+      trading_date: '2026-09-09', ts_event: '2026-09-09T08:12:00Z', is_stale: false };
+    state.live.points.set('LIVE', point);
+    applyLivePrice(point, '2026-09-09');
+  `, context);
+  const updated = structuredClone(initial);
+  for (const view of ['snapshot', 'today']) updated[view].rows[0].sigma_1d_pct = 4;
+  responses.push(response(updated, '"sigma-ready"'));
+  await vm.runInContext('refreshDashboardState()', context);
+  for (const payload of ['state.payload', 'state.todayPayload']) {
+    assert.equal(vm.runInContext(`${payload}.rows[0].sigma_1d_pct`, context), 4);
+    assert.equal(vm.runInContext(`${payload}.rows[0].last_price`, context), 105);
+    assert.ok(Math.abs(vm.runInContext(`${payload}.rows[0].z_score`, context) - Math.log(1.05)/.04) < 1e-10);
+  }
+  // A stale Friday list must use the verified Tuesday anchor in both views,
+  // even when the feed carries an approximate or older regular close.
+  const anchored = structuredClone(updated);
+  for (const view of ['snapshot', 'today']) {
+    anchored[view].anchor_date = '2026-09-04';
+    Object.assign(anchored[view].rows[0], { return_anchor_price: 110,
+      return_anchor_date: '2026-09-08', return_anchor_timestamp: '2026-09-08T20:00:00Z' });
+  }
+  responses.push(response(anchored, '"anchor-ready"'));
+  await vm.runInContext('refreshDashboardState()', context);
+  vm.runInContext(`
+    applyLivePrice({ ticker: 'LIVE', price: 106, session: 'premarket',
+      trading_date: '2026-09-09', ts_event: '2026-09-09T08:13:00Z', is_stale: false,
+      regular_close: { price: 99, trading_date: '2026-09-04', ts_event: '2026-09-04T19:58:00Z' }
+    }, '2026-09-09');
+  `, context);
+  for (const payload of ['state.payload', 'state.todayPayload']) {
+    assert.equal(vm.runInContext(`${payload}.rows[0].last_price`, context), 106);
+    assert.equal(vm.runInContext(`${payload}.rows[0].regular_price`, context), 110);
+    assert.ok(Math.abs(vm.runInContext(`${payload}.rows[0].z_score`, context) - Math.log(106/110)/.04) < 1e-10);
+    assert.ok(Math.abs(vm.runInContext(`extendedPriceState(${payload}.rows[0]).change.percent`, context) - (106/110-1)*100) < 1e-10);
+  }
+
+});

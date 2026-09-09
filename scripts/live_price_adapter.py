@@ -976,9 +976,6 @@ def create_app(
     state_bundle = with_yesterday_snapshot(
         state_bundle, getattr(args, "yesterday_state_cache", None),
     )
-    state_etag = '"' + hashlib.sha256(
-        json.dumps(state_bundle, sort_keys=True).encode()
-    ).hexdigest() + '"'
     snapshot = state_bundle["snapshot"]
     universe = state_bundle["today"]
     symbols = tracked_symbols(snapshot, universe)
@@ -1127,11 +1124,43 @@ def create_app(
         payload["stream"] = store.stream_metrics()
         return web.json_response(payload)
 
+    from scripts.expected_sigma import ExpectedSigma
+    expected_sigma = ExpectedSigma(
+        getattr(args, "state_cache", args.cache).parent,
+        max_option_cost=getattr(args, "max_option_cost", 5.0),
+        max_spot_cost=getattr(args, "max_spot_cost", 1.0),
+    )
+
     async def state_handler(request: web.Request) -> web.Response:
-        headers = {"Cache-Control": "no-store", "ETag": state_etag}
-        if request.headers.get("If-None-Match") == state_etag:
+        payload = state_bundle if args.mock else expected_sigma.apply(state_bundle)
+        current_etag = '"' + hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest() + '"'
+        headers = {"Cache-Control": "no-store", "ETag": current_etag}
+        if request.headers.get("If-None-Match") == current_etag:
             return web.Response(status=304, headers=headers)
-        return web.json_response(state_bundle, headers=headers)
+        return web.json_response(payload, headers=headers)
+
+    async def expected_sigma_loop() -> None:
+        from scripts.expected_sigma import next_activation
+        while not stop.is_set():
+            now = utc_now()
+            activation = next_activation(now)
+            # Prepare tomorrow independently: failure to repair an older active
+            # snapshot must not prevent saving a close still inside replay.
+            if activation is not None:
+                try:
+                    await asyncio.to_thread(expected_sigma.refresh, state_bundle, now,
+                                            effective_at=activation, regular_prices=dict(store.regular_prices))
+                except Exception:
+                    pass  # Active-session failures below are user-visible.
+            try:
+                await asyncio.to_thread(expected_sigma.refresh, state_bundle,
+                                        regular_prices=dict(store.regular_prices))
+            except Exception as exc:
+                expected_sigma.error = f"{type(exc).__name__}: {exc}"
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=60)
+            except asyncio.TimeoutError:
+                pass
 
     async def index_handler(_: web.Request) -> web.FileResponse:
         return web.FileResponse(args.dashboard / "index.html")
@@ -1152,6 +1181,8 @@ def create_app(
             asyncio.create_task(iv_calculation_loop(), name="iv-calculation"),
         ]
         tasks.append(asyncio.create_task(calibration_refresh.run(stop), name="calibration-refresh"))
+        if not args.mock:
+            tasks.append(asyncio.create_task(expected_sigma_loop(), name="expected-sigma"))
         if args.mock:
             tasks.append(asyncio.create_task(mock_feed(universe, store, stop), name="mock-feed"))
         else:

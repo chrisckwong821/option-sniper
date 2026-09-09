@@ -27,6 +27,26 @@ class CacheTests(unittest.TestCase):
         atomic_json(self.root / 'history-manifest.json', dict(files=[row]))
         return row
 
+    def test_conditional_json_update_retries_competing_writer(self):
+        self.s3.get_object.side_effect = [
+            {'Body': io.BytesIO(b'{"AAA":1}'), 'ETag': 'v1'},
+            {'Body': io.BytesIO(b'{"AAA":1,"BBB":2}'), 'ETag': 'v2'}]
+        self.s3.put_object.side_effect = [ClientError({'Error': {'Code': 'PreconditionFailed'}}, 'PutObject'), None]
+        value = self.shared.update_json('sigma.json', lambda old: {**old, 'CCC': 3})
+        self.assertEqual(value, {'AAA': 1, 'BBB': 2, 'CCC': 3})
+        self.assertEqual(self.s3.put_object.call_args.kwargs['IfMatch'], 'v2')
+        self.assertEqual(self.s3.put_object.call_args.kwargs['ServerSideEncryption'], 'AES256')
+
+    def test_conditional_json_update_creates_only_on_missing(self):
+        self.s3.get_object.side_effect = ClientError({'Error': {'Code': 'NoSuchKey'}}, 'GetObject')
+        self.shared.update_json('sigma.json', lambda old: {'AAA': 1})
+        self.assertEqual(self.s3.put_object.call_args.kwargs['IfNoneMatch'], '*')
+        self.s3.get_object.side_effect = ClientError({'Error': {'Code': 'AccessDenied'}}, 'GetObject')
+        self.s3.put_object.reset_mock()
+        with self.assertRaises(SharedCacheError):
+            self.shared.update_json('sigma.json', lambda old: {'AAA': 1})
+        self.s3.put_object.assert_not_called()
+
     def test_login_profile_receives_region_before_credentials_resolve(self):
         import os
         with patch.dict(os.environ, {'SIGMA_S3_REGION':'ap-southeast-1','SIGMA_AWS_PROFILE':'test-login'}), patch('boto3.Session') as session:

@@ -1310,3 +1310,4 @@ footer {
 .iv-expansion-meta{font-size:9px;text-transform:none;font-weight:500;margin-top:8px}
 .today-table th:nth-child(9),.today-table td:nth-child(9){width:19%}
 .today-table th:nth-child(2),.today-table td:nth-child(2){width:16%}
+.sigma-pending { display: block; color: #d9a85c; font-size: 10px; max-width: 130px; }

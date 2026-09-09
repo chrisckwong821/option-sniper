@@ -107,6 +107,44 @@ class SharedCache:
             except Exception as exc:
                 raise SharedCacheError(f'S3 upload failed for {suffix}: {type(exc).__name__}') from exc
 
+    def update_json(self, suffix, update):
+        """Conditionally publish a merged document, retrying competing writers."""
+        if not self.enabled:
+            return update({})
+        from botocore.exceptions import ClientError
+        for _ in range(4):
+            try:
+                try:
+                    response = self.client.get_object(Bucket=self.bucket, Key=self.key(suffix))
+                    with response["Body"] as body:
+                        raw = body.read()
+                    checksum = response.get("Metadata", {}).get("sha256")
+                    if checksum and hashlib.sha256(raw).hexdigest() != checksum:
+                        raise SharedCacheError("Shared JSON checksum mismatch")
+                    previous = json.loads(raw)
+                    condition = {"IfMatch": response["ETag"]}
+                except ClientError as exc:
+                    if exc.response.get("Error", {}).get("Code") not in ("NoSuchKey", "404", "NotFound"):
+                        raise
+                    previous, condition = {}, {"IfNoneMatch": "*"}
+                value = update(previous)
+                if value == previous:
+                    return value
+                raw = json.dumps(value, sort_keys=True).encode()
+                self.client.put_object(Bucket=self.bucket, Key=self.key(suffix), Body=raw,
+                    ServerSideEncryption="AES256", Metadata={"sha256": hashlib.sha256(raw).hexdigest()},
+                    ContentType="application/json", **condition)
+                return value
+            except ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") in ("PreconditionFailed", "412", "ConditionalRequestConflict", "409"):
+                    continue
+                raise SharedCacheError("Shared JSON update failed: " + exc.response["Error"]["Code"]) from exc
+            except SharedCacheError:
+                raise
+            except Exception as exc:
+                raise SharedCacheError("Shared JSON update failed: " + type(exc).__name__) from exc
+        raise SharedCacheError("Shared JSON update conflicted repeatedly")
+
     def restore_file(self, path):
         path = Path(path).resolve()
         if path.exists():

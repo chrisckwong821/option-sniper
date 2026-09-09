@@ -208,12 +208,14 @@ function sigmaContext(row) {
 }
 
 function expectedSigmaTooltip(row) {
+  const pending = row.expected_sigma_status === "awaiting_previous_close"
+    ? `Awaiting ${row.expected_sigma_target_iv_session} closing IV. Showing the previous available sigma. ` : "";
   const context = sigmaContext(row);
   if (!context) {
-    return "Option-implied expected move for the stored close-to-close horizon.";
+    return pending + "Option-implied expected move for the stored close-to-close horizon.";
   }
   const days = Math.round(context.horizon.calendarDays * 100) / 100;
-  return [
+  return pending + [
     `Option IV: ${formatNumber(context.annualizedIvPct)}% annualized at ${formatMarketMoment(row.iv_snapshot_time)}.`,
     `Expected sigma: ${formatNumber(context.annualizedIvPct)}% x sqrt(${formatNumber(days, Number.isInteger(days) ? 0 : 2)}/365) = ${formatNumber(row.sigma_1d_pct)}%.`,
     `Horizon: ${formatMarketMoment(row.iv_snapshot_time)} to ${formatMarketMoment(context.end)}.`,
@@ -292,7 +294,8 @@ function visibleRows(view = state.view) {
         if (settings.sortKey === "gain_pct") {
           return displayGainPct(row, view);
         }
-        if (settings.sortKey === "abs_z_score") return Math.abs(Number(row.z_score));
+        if (settings.sortKey === "abs_z_score") return row.z_score == null ? Number.NaN : Math.abs(Number(row.z_score));
+        if (settings.sortKey === "z_score" && row.z_score == null) return Number.NaN;
         if (settings.sortKey === "iv_expansion_pct") {
           if (row.iv_expansion_pct == null) return Number.NaN;
           return Number(row.iv_expansion_pct);
@@ -495,10 +498,10 @@ function rowMarkup(row, viewRank) {
         ${priceStackMarkup(row)}
       </td>
       <td>${gainStackMarkup(row)}</td>
-      <td><span class="number term-tip sigma-value" tabindex="0" data-tooltip="${escapeHtml(expectedSigmaTooltip(row))}">${formatNumber(row.sigma_1d_pct)}%</span></td>
+      <td><span class="number term-tip sigma-value" tabindex="0" data-tooltip="${escapeHtml(expectedSigmaTooltip(row))}">${formatNumber(row.sigma_1d_pct)}%</span>${row.expected_sigma_status === "awaiting_previous_close" ? '<small class="sigma-pending">Awaiting previous-close IV</small>' : ''}</td>
       <td>
         <div class="z-cell">
-          <span class="z-value ${direction}">${formatNumber(row.z_score, 3)}</span>
+          <span class="z-value ${direction}">${row.z_score == null ? "—" : formatNumber(row.z_score, 3)}</span>
           <span class="z-track"><span class="z-bar ${direction}" style="width:${width}%"></span></span>
         </div>
       </td>
@@ -620,7 +623,7 @@ function render() {
     state.view === "today" ? Math.abs(row.z_score) > 1 : row.z_score > 1
   )).length;
 
-  elements.topSignal.textContent = top ? `${formatNumber(top.z_score, 3)} z` : "--";
+  elements.topSignal.textContent = top && top.z_score != null ? `${formatNumber(top.z_score, 3)} z` : "--";
   elements.topSignal.dataset.direction = top && top.z_score < 0 ? "negative" : "positive";
   elements.topTicker.textContent = top?.ticker || "No matching movers";
   elements.outsideCount.textContent = outsideCount;
@@ -629,7 +632,7 @@ function render() {
   elements.sessionDate.textContent = formatDate(state.live.dataDate || payload.data_date);
   elements.lastUpdate.textContent = formatUpdate(liveTimestamp || payload.last_update_utc);
   elements.anchorNote.textContent = state.view === "today"
-    ? `Today's return anchor: ${formatDate(payload.anchor_date)} close`
+    ? `Today's return anchor: ${formatDate(payload.rows.find(row => row.return_anchor_date)?.return_anchor_date || payload.anchor_date)} close`
     : `Saved screen anchor: ${formatDate(payload.anchor_date)} close`;
   elements.ivNote.textContent = `${expectedSigmaNote(payload)} · Expiry ${formatDate(payload.option_expiry)}`;
   document.querySelectorAll(".sort-button").forEach((button) => {
@@ -736,6 +739,7 @@ function applyLivePriceToRow(row, point) {
     regularClose?.trading_date,
   );
   const stalePremarketAnchor = state.live.marketSession === "premarket"
+    && !row.return_anchor_price
     && regularClose?.trading_date
     && regularClose.trading_date !== row.payload_anchor_date;
   const reopeningOvernight = window.SigmaMath.isReopeningOvernight(
@@ -999,6 +1003,16 @@ function initializeRows(payload, view) {
       row.regular_source = payload.price_source;
       row.regular_trading_date = payload.data_date;
       row.regular_is_live = false;
+      if (Number(row.return_anchor_price) > 0) {
+        row.payload_anchor_date = row.return_anchor_date;
+        row.live_anchor_price = Number(row.return_anchor_price);
+        row.regular_price = Number(row.return_anchor_price);
+        row.regular_timestamp = row.return_anchor_timestamp;
+        row.regular_trading_date = row.return_anchor_date;
+        row.regular_source = "Verified session close";
+        row.last_price = Number(row.return_anchor_price);
+        row.z_score = null;
+      }
       row.holding_completed_close = false;
       row.reopening_overnight = false;
       row.regular_gain_pct = window.SigmaMath.primaryGainPct(
@@ -1011,7 +1025,7 @@ function initializeRows(payload, view) {
       row.extended_session = null;
       row.extended_trading_date = null;
       row.extended_stale = false;
-      row.price_timestamp = payload.last_update_utc;
+      row.price_timestamp = row.return_anchor_timestamp || payload.last_update_utc;
       row.price_session = "snapshot";
       row.price_trading_date = payload.data_date;
       row.price_stale = false;
