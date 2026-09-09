@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import math
 import sqlite3
 import threading
@@ -1168,7 +1169,27 @@ def _contracts_for_session(
     *,
     observation_session: date,
     contract_cache: dict[date, dict[str, dict[date, list[dict[str, Any]]]]] | None = None,
+    available_at: date | None = None,
 ) -> dict[str, dict[date, list[dict[str, Any]]]]:
+    if os.environ.get('SIGMA_BUCKET_CACHED_CONTRACTS_ONLY') == '1':
+        from .iv_expansion import format_occ_symbol
+        contracts = {}
+        for row in rows:
+            ref, chain = row.get('iv_expansion_reference') or {}, row.get('iv_chain') or {}
+            known = str(ref.get('reference_session') or ref.get('observation_time') or '')[:10]
+            if not known or date.fromisoformat(known) > (available_at or session):
+                continue  # Never introduce contracts learned after the baseline.
+            expiry = date.fromisoformat(ref['option_expiry'])
+            root = chain.get('occ_root')
+            if not root or expiry < observation_session:
+                continue
+            pairs = [{'root': root, 'strike': float(k),
+                      'call': format_occ_symbol(root, str(expiry), 'C', float(k)),
+                      'put': format_occ_symbol(root, str(expiry), 'P', float(k))}
+                     for k in chain.get('strikes', [])]
+            if pairs:
+                contracts[row['ticker']] = {expiry: pairs}
+        return contracts
     if contract_cache is not None and session in contract_cache:
         return contract_cache[session]
     full_request = _definition_request(rows, session)
@@ -1289,6 +1310,7 @@ def build_baselines(
             candidate_rows,
             definition_session,
             observation_session=observation_session,
+            available_at=reference,
             contract_cache=(
                 contract_cache
                 if definition_session == cycle_catalog_session

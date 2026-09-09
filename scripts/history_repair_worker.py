@@ -18,6 +18,7 @@ def main():
     root = args.root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     os.environ['SIGMA_CACHE_ROOT'] = str(root)
+    os.environ['SIGMA_BUCKET_CACHED_CONTRACTS_ONLY'] = '1'
     shared = SharedCache(root)
     if not shared.enabled:
         raise RuntimeError('Dedicated worker requires S3')
