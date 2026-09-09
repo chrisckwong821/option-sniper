@@ -48,6 +48,19 @@ class HealthTests(unittest.TestCase):
             if mutation == 'stale_dashboard': payload['dashboard_state']['status'] = 'stale'
             self.assertTrue(check(payload, now), mutation)
 
+    def test_s3_only_consumer_can_serve_explicit_prior_calibration(self):
+        now = datetime(2026, 9, 9, 14, 0, tzinfo=timezone.utc)
+        payload = healthy(now)
+        payload['dashboard_state']['data_date'] = '2026-09-08'
+        payload['iv_expansion']['reference_date'] = '2026-09-08'
+        payload['calibration'].update(cache_mode='s3_only', is_stale=True)
+        self.assertEqual(check(payload, now), [])
+        payload['calibration']['active_date'] = '2026-09-03'
+        self.assertTrue(check(payload, now))
+        payload['calibration']['active_date'] = '2026-09-04'
+        payload['feeds']['OPRA.PILLAR']['last_record_at'] = None
+        self.assertTrue(check(payload, now))
+
     def test_healthy_and_overnight_warning(self):
         payload = healthy()
         payload['feeds']['OCEA.MEMOIR'] = {'state': 'retrying'}

@@ -32,10 +32,10 @@ def check(payload, now=None):
     iv = payload.get('iv_expansion', {})
     reference_date = iv.get('reference_date') or state.get('data_date')
     compatible = calibration.get('active_date') == reference_date
-    # Pre-market intentionally hides live IV Expansion. The immediately prior
-    # calibration can remain loaded while the new reference warms up; regular
-    # trading still requires a matching calibration and fresh observations.
-    if premarket and reference_date == str(calendar.previous_session(session).date()):
+    # S3-only consumers may explicitly retain the immediately prior calibration
+    # while the publisher repairs it. Never accept older/unversioned statistics;
+    # regular trading still requires fresh live observations and feed records.
+    if (premarket or (calibration.get("cache_mode") == "s3_only" and calibration.get("is_stale") is True)) and reference_date == str(calendar.previous_session(session).date()):
         compatible = compatible or calibration.get('active_date') == str(calendar.previous_session(reference_date).date())
     if not calibration.get('active_version') or not compatible:
         errors.append('Compatible sigma calibration is not loaded for the dashboard date')

@@ -1112,7 +1112,8 @@ def create_app(
                 "screening_policy_fingerprint"
             ),
         }
-        payload["calibration"] = dict(calibration_refresh.status)
+        payload["calibration"] = {**calibration_refresh.status, "cache_mode": "s3_only",
+                                  "is_stale": calibration_refresh.status.get("active_date") != universe["anchor_date"]}
         payload["history_repair"] = dict(history_repair_status)
         payload["stream"] = store.stream_metrics()
         return web.json_response(payload)
