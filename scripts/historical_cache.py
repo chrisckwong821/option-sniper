@@ -31,6 +31,19 @@ def normalized(request):
             'end': pd.Timestamp(request['end']).value, 'limit': request.get('limit')}
 
 
+def _read_frame(store, schema):
+    if schema != 'definition':
+        return store.to_df()
+    # The historical-cache assembly path must also avoid wide OPRA frames.
+    chunks = store.to_df(count=10000, map_symbols=False)
+    if isinstance(chunks, pd.DataFrame):
+        chunks = [chunks]
+    reduced = []
+    for chunk in chunks:
+        reduced.append(chunk[[c for c in ('raw_symbol', 'symbol') if c in chunk]].copy())
+    return pd.concat(reduced) if reduced else pd.DataFrame()
+
+
 class FrameStore:
     def __init__(self, frame):
         self.frame = frame
@@ -244,7 +257,7 @@ class HistoricalCache:
                     source = self.root / name
                     if entry.get('sha256') and digest(source) != entry['sha256']:
                         raise SharedCacheError('Local history checksum mismatch: ' + name)
-                    loaded[name] = db.DBNStore.from_file(source).to_df()
+                    loaded[name] = _read_frame(db.DBNStore.from_file(source), request.get('schema'))
                 frame = loaded[name]
                 stamp = pd.to_datetime(frame.index, utc=True)
                 mask = (stamp >= pd.Timestamp(a, tz='UTC')) & (stamp < pd.Timestamp(b, tz='UTC'))
@@ -272,7 +285,7 @@ class HistoricalCache:
                 try:
                     self.client.timeseries.get_range(**missing, path=temporary)
                     store = db.DBNStore.from_file(temporary)
-                    frames.append(store.to_df())
+                    frames.append(_read_frame(store, request.get('schema')))
                     os.replace(temporary, target)
                 finally:
                     temporary.unlink(missing_ok=True)
