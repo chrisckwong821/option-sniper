@@ -279,3 +279,17 @@ class SharedSigmaTests(unittest.TestCase):
         objects['expected-sigma/2026-09-09.json'] = {'plan': sigma_plan(at('2026-09-08T04:00:00-04:00')), 'inputs': {}}
         with self.assertRaises(SharedCacheError):
             self.sigma.refresh(bundle(), when)
+
+    def test_partial_current_snapshot_restores_shared_prior_fallback(self):
+        objects = self.configure_shared()
+        when = at('2026-09-09T04:12:00-04:00')
+        previous = sigma_plan(at('2026-09-08T04:12:00-04:00'))
+        objects['expected-sigma/2026-09-08.json'] = {'plan': previous,
+            'rows': {'AAA': {'sigma_1d_pct': 3, 'annualized_implied_vol_pct': 3 / math.sqrt(previous['year_fraction'])}},
+            'inputs': {'spots': {'AAA': 100}}}
+        with patch('scripts.expected_sigma.resolve_historical_api_keys', return_value=(None, None)):
+            with self.assertRaises(RuntimeError):
+                self.sigma.refresh(bundle(), when)
+        row = self.sigma.apply(bundle(), when)['today']['rows'][0]
+        self.assertEqual(row['sigma_1d_pct'], 3)
+        self.assertEqual(row['expected_sigma_status'], 'awaiting_previous_close')

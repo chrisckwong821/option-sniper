@@ -246,6 +246,14 @@ class ExpectedSigma:
             self.publish(plan)
             self.error = None
             return
+        # Partial current coverage shares the same explicitly stale fallback
+        # across fresh instances, instead of inheriting different list caches.
+        activation = datetime.combine(datetime.fromisoformat(plan["effective_session"]).date(),
+                                      datetime.min.time(), EASTERN).replace(hour=4)
+        previous_plan = sigma_plan(activation - timedelta(seconds=1))
+        previous_path = self.root / (previous_plan["effective_session"] + ".json")
+        if not previous_path.exists():
+            self.sync_shared(previous_plan)
         close = datetime.fromisoformat(plan["iv_snapshot_time"])
         if close > now:
             raise RuntimeError("Cannot prepare IV before the reference session closes")
