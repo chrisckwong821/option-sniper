@@ -293,3 +293,23 @@ class SharedSigmaTests(unittest.TestCase):
         row = self.sigma.apply(bundle(), when)['today']['rows'][0]
         self.assertEqual(row['sigma_1d_pct'], 3)
         self.assertEqual(row['expected_sigma_status'], 'awaiting_previous_close')
+
+    def test_verified_shared_close_is_not_overwritten_by_list_or_live_close(self):
+        self.configure_shared()
+        when = at('2026-09-09T04:12:00-04:00')
+        plan = sigma_plan(when)
+        self.save(when.isoformat())
+        atomic_write_json(self.sigma.root / 'close-2026-09-08.json', {'spots': {'AAA': 100}})
+        self.sigma.publish(plan)
+        # A missing second ticker takes the partial refresh path.
+        source = bundle()
+        source['today']['rows'].append({'ticker': 'BBB'})
+        with tempfile.TemporaryDirectory() as root:
+            other = ExpectedSigma(Path(root))
+            other.shared = self.sigma.shared
+            with patch('scripts.expected_sigma.resolve_historical_api_keys', return_value=(None, None)):
+                with self.assertRaises(RuntimeError):
+                    other.refresh(source, when, regular_prices={'AAA': {'price': 99,
+                        'trading_date': '2026-09-08', 'ts_event': '2026-09-08T19:59:55+00:00'}})
+            from scripts.expected_sigma import read_json
+            self.assertEqual(read_json(other.root / 'close-2026-09-08.json')['spots']['AAA'], 100)

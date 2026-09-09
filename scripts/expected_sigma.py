@@ -265,14 +265,14 @@ class ExpectedSigma:
             if (point.get("trading_date") == plan["iv_session"]
                     and close - timedelta(minutes=1) <= stamp <= close
                     and math.isfinite(float(point["price"])) and float(point["price"]) > 0):
-                spots[ticker] = float(point["price"])
+                spots.setdefault(ticker, float(point["price"]))
         for view in ("today", "snapshot"):
             payload = bundle[view]
             for row in payload["rows"]:
                 if payload.get("data_date") == plan["iv_session"]:
                     value = row.get("last_price")
                     if value and math.isfinite(float(value)) and float(value) > 0:
-                        spots[row["ticker"]] = float(value)
+                        spots.setdefault(row["ticker"], float(value))
         spot_key, historical_key = resolve_historical_api_keys()
         atomic_write_json(inputs_path, {**inputs, "spots": spots})
         quotes = inputs.get("quotes", [])
