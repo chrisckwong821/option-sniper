@@ -105,6 +105,14 @@ class StartupRoundtripTests(unittest.TestCase):
             startup_history.ensure_bucket_statistics(self.source, self.state)
             publish.assert_called_once_with(self.source)
 
+    def test_background_reconstruction_preserves_configured_budget(self):
+        self.write('iv-expansion-statistics-session-batch.json', {'last_calibration_session': 'old'})
+        with patch.dict(startup_history.os.environ, {'SIGMA_RECONSTRUCTION_MAX_COST': '5'}), patch.object(startup_history, 'SharedCache', return_value=Mock(enabled=True)), patch('scripts.computed_cache.restore', return_value=False), patch.object(startup_history.subprocess, 'run', return_value=SimpleNamespace(returncode=1)) as run:
+            with self.assertRaises(RuntimeError):
+                startup_history.ensure_bucket_statistics(self.source, self.state, allow_download=True)
+            self.assertEqual(run.call_args.kwargs['env']['SIGMA_RECONSTRUCTION_MAX_COST'], '5')
+            self.assertEqual(run.call_args.kwargs['timeout'], 300)
+
     def test_archive_excludes_secrets_and_marks_damaged_history(self):
         raw = self.source / 'iv-expansion-history/raw/spot/2026-08-27'
         raw.mkdir(parents=True)

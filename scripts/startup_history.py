@@ -35,11 +35,22 @@ def ensure_bucket_statistics(root, state, allow_download=True):
                '--cache-root', str(root / 'iv-expansion-history'), '--stats-output', str(stats_path),
                '--max-cost', '5', '--download-retries', '0', '--download-workers', '1']
     env = {**os.environ, 'SIGMA_CACHE_ROOT': str(root)}
+    # Repeated retries and restarts share one reservation ledger per session.
+    # A retry must never silently obtain another full download allowance.
+    budget = root / 'reconstruction-runs' / ('bucket-' + target + '.json')
+    budget.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with budget.open('x') as stream:
+            stream.write('{}')
+    except FileExistsError:
+        pass
+    env['SIGMA_RECONSTRUCTION_BUDGET_FILE'] = str(budget)
+    env['SIGMA_RECONSTRUCTION_SESSION'] = target
     if not allow_download:
         env['SIGMA_RECONSTRUCTION_MAX_COST'] = '0'
     with (root / 'bucket-reconstruction.log').open('w') as output:
         result = subprocess.run(command, cwd=Path(__file__).resolve().parents[1], env=env,
-                                stdout=output, stderr=subprocess.STDOUT, check=False)
+                                stdout=output, stderr=subprocess.STDOUT, check=False, timeout=300)
     if result.returncode:
         raise RuntimeError('Bucket reconstruction failed; see bucket-reconstruction.log. No further download fallback was attempted.')
     from .computed_cache import publish
