@@ -23,6 +23,31 @@ def healthy(now=NOW):
 
 
 class HealthTests(unittest.TestCase):
+    def test_premarket_allows_previous_calibration_without_live_option_observations(self):
+        now = datetime(2026, 9, 9, 8, 30, tzinfo=timezone.utc)
+        payload = healthy(now)
+        payload['dashboard_state']['data_date'] = '2026-09-08'
+        payload['iv_expansion'].update(reference_date='2026-09-08', calculated_symbols=0)
+        payload['iv_expansions'] = []
+        self.assertEqual(check(payload, now), [])
+        # Same state must fail once regular option trading starts, even if the
+        # payload incorrectly claims pre-market.
+        payload['market_session'] = 'premarket'
+        regular = datetime(2026, 9, 9, 13, 30, tzinfo=timezone.utc)
+        payload['server_time'] = regular.isoformat()
+        self.assertTrue(check(payload, regular))
+
+    def test_premarket_still_requires_valid_calibration_and_references(self):
+        now = datetime(2026, 9, 9, 8, 30, tzinfo=timezone.utc)
+        for mutation in ('too_old', 'missing_version', 'missing_references', 'stale_dashboard'):
+            payload = healthy(now)
+            payload['iv_expansion'].update(reference_date='2026-09-08', calculated_symbols=0)
+            if mutation == 'too_old': payload['calibration']['active_date'] = '2026-09-03'
+            if mutation == 'missing_version': payload['calibration']['active_version'] = None
+            if mutation == 'missing_references': payload['iv_expansion']['reference_symbols'] = 0
+            if mutation == 'stale_dashboard': payload['dashboard_state']['status'] = 'stale'
+            self.assertTrue(check(payload, now), mutation)
+
     def test_healthy_and_overnight_warning(self):
         payload = healthy()
         payload['feeds']['OCEA.MEMOIR'] = {'state': 'retrying'}

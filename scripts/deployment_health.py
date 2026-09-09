@@ -11,6 +11,12 @@ import exchange_calendars
 def check(payload, now=None):
     now = now or datetime.now(timezone.utc)
     errors = []
+    calendar = exchange_calendars.get_calendar('XNYS')
+    local_now = now.astimezone(ZoneInfo('America/New_York'))
+    session = local_now.date().isoformat()
+    trading_day = calendar.is_session(session)
+    regular = trading_day and calendar.session_open(session) <= now < calendar.session_close(session)
+    premarket = trading_day and local_now.hour >= 4 and now < calendar.session_open(session)
     def fresh(value, seconds):
         try:
             stamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
@@ -25,11 +31,17 @@ def check(payload, now=None):
         errors.append('Dashboard cache is not fresh')
     iv = payload.get('iv_expansion', {})
     reference_date = iv.get('reference_date') or state.get('data_date')
-    if not calibration.get('active_version') or calibration.get('active_date') != reference_date:
+    compatible = calibration.get('active_date') == reference_date
+    # Pre-market intentionally hides live IV Expansion. The immediately prior
+    # calibration can remain loaded while the new reference warms up; regular
+    # trading still requires a matching calibration and fresh observations.
+    if premarket and reference_date == str(calendar.previous_session(session).date()):
+        compatible = compatible or calibration.get('active_date') == str(calendar.previous_session(reference_date).date())
+    if not calibration.get('active_version') or not compatible:
         errors.append('Compatible sigma calibration is not loaded for the dashboard date')
     if calibration.get('error'):
         errors.append('Calibration refresh reports an error')
-    if not iv.get('reference_symbols') or not iv.get('calculated_symbols'):
+    if not iv.get('reference_symbols') or (not premarket and not iv.get('calculated_symbols')):
         errors.append('IV references or observations are missing')
     feeds = payload.get('feeds', {})
     for name in ('EQUS.MINI', 'OPRA.PILLAR'):
@@ -37,9 +49,6 @@ def check(payload, now=None):
             errors.append(name + ' is offline or degraded')
     # Use the real calendar, including holidays and shortened sessions, rather
     # than trusting the backend's weekday-only session label.
-    calendar = exchange_calendars.get_calendar('XNYS')
-    session = now.astimezone(ZoneInfo('America/New_York')).date().isoformat()
-    regular = calendar.is_session(session) and calendar.session_open(session) <= now < calendar.session_close(session)
     if regular:
         for name in ('EQUS.MINI', 'OPRA.PILLAR'):
             if not fresh(feeds.get(name, {}).get('last_record_at'), 180):
