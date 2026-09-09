@@ -80,7 +80,7 @@ rollback() {
   set +e
   echo "Activation failed; restoring $previous_revision with cache snapshot $snapshot" >&2
   if [[ "$stopped" == true ]]; then
-    if ! compose_at "$release" "$revision" stop "${services[@]}"; then
+    if ! compose_at "$release" "$revision" stop -t 3 "${services[@]}"; then
       echo 'Could not stop candidate safely; refusing live cache replacement' >&2
       exit 1
     fi
@@ -108,7 +108,7 @@ rollback() {
         [[ "$state_alert" == 'running healthy' ]] || alert_ok=false
       fi
       if [[ "$state" == 'running healthy' && "$alert_ok" == true ]]; then recovered=true; break; fi
-      sleep 5
+      sleep 1
     done
     if [[ "$recovered" != true ]]; then
       echo 'Rollback containers did not recover health; operator action required' >&2
@@ -120,19 +120,33 @@ rollback() {
 }
 trap 'rollback $?' ERR
 trap 'rollback 130' INT TERM
+if [[ "$environment" == production ]]; then
+  # Capture before touching production; a missing staging reference fails safely.
+  python3 "$release/scripts/verify_sigma_parity.py" --capture \
+    --reference "$snapshot-staging-sigma.json" --url http://127.0.0.1:8766/api/state
+fi
 stopped=true
 compose_at "$previous" "$previous_revision" stop "${services[@]}"
 python3 "$release/scripts/deployment_cache.py" backup "$cache" "$snapshot"
 saved=true
 save_timers
-compose_at "$release" "$revision" up -d --no-build --force-recreate "${services[@]}"
+if [[ "$environment" == production ]]; then
+  compose_at "$release" "$revision" up -d --no-build --force-recreate backend
+  # Check before starting the alerter or accepting the new release. A data
+  # mismatch immediately takes the cache/image rollback path, without a build.
+  python3 "$release/scripts/verify_sigma_parity.py" \
+    --reference "$snapshot-staging-sigma.json" --url http://127.0.0.1:8765/api/state --wait-seconds 30
+  compose_at "$release" "$revision" up -d --no-build alerter
+else
+  compose_at "$release" "$revision" up -d --no-build --force-recreate "${services[@]}"
+fi
 # Explicit failure injection is restricted to staging for rollback drills.
 if [[ "$environment" == staging && "${SIGMA_STAGING_FAIL_HEALTH:-0}" == 1 ]]; then
   echo 'Intentional staging readiness failure' >&2
   false
 fi
 ready=false
-for _ in $(seq 1 90); do
+for _ in $(seq 1 30); do
   backend_state="$(docker inspect --format '{{.State.Status}} {{.State.Health.Status}}' "$backend")"
   alerter_ok=true
   if [[ "$environment" == production ]]; then
@@ -145,7 +159,7 @@ for _ in $(seq 1 90); do
     ready=true
     break
   fi
-  sleep 5
+  sleep 2
 done
 if [[ "$ready" != true ]]; then
   echo 'Release readiness failed (including Discord alerter in production)' >&2
