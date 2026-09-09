@@ -1159,6 +1159,18 @@ def create_app(
                 ),
                 "planned_symbols": len(option_runtime["plans"]),
                 "last_error": option_runtime["catalog_error"],
+                "live_definition_symbols": len(live_catalog.symbols),
+            },
+            "missing_results": {
+                ticker: {
+                    "selected_strikes": option_runtime["plans"].get(ticker, {}).get("selected_strikes", []),
+                    "quote_count": len(iv_tracker.quotes.get(ticker, {})),
+                    "fresh_pair_strikes": [pair["strike"] for pair in iv_tracker._fresh_pairs(ticker, utc_now())],
+                    "moneyness_targets": reference["moneyness_targets"],
+                }
+                for ticker, reference in iv_tracker.references.items()
+                if ticker not in iv_tracker.results
+
             },
         }
         payload["dashboard_state"] = {
