@@ -34,7 +34,7 @@ snapshot="$(mktemp -d "$cache-deploy-backups/$revision.XXXXXX")"
 stopped=false
 saved=false
 timers_saved=false
-timer_names=(option-sniper-refresh option-sniper-yesterday-refresh option-sniper-reopening-refresh option-sniper-history-repair)
+timer_names=(option-sniper-refresh option-sniper-yesterday-refresh option-sniper-reopening-refresh)
 save_timers() {
   [[ "$environment" == production ]] || return 0
   for name in "${timer_names[@]}"; do

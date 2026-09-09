@@ -1,0 +1,18 @@
+[Unit]
+Description=Incremental Option Sniper bucket sigma publisher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/sigma-tape
+EnvironmentFile=/etc/sigma-bucket-worker.env
+ExecStart=/home/ec2-user/sigma-tape/.venv/bin/python -m scripts.history_repair_worker --root /home/ec2-user/sigma-cache
+Nice=15
+CPUQuota=75%
+MemoryMax=1300M
+TimeoutStartSec=20min
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true

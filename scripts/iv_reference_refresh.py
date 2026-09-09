@@ -41,6 +41,33 @@ def closing_references(service, now=None):
     return plan, references
 
 
+def shared_references(service, now=None):
+    """Serving instances only download validated worker output; no IV fitting."""
+    import tempfile
+    plan = sigma_plan(now)
+    with tempfile.TemporaryDirectory() as folder:
+        path = __import__('pathlib').Path(folder) / 'references.json'
+        if not service.shared.get('bucket-sigma/' + plan['effective_session'] + '.json', path):
+            return plan, {}
+        payload = read_json(path)
+    if payload.get('plan') != plan:
+        raise ValueError('Bucket reference publication has incorrect session')
+    refs = payload.get('references', {})
+    if not isinstance(refs, dict) or not refs:
+        raise ValueError('Empty bucket reference publication')
+    for ref in refs.values():
+        if (ref.get('reference_session') != plan['iv_session'] or ref.get('requested_session') != plan['iv_session']
+                or ref.get('reference_status') != 'yesterday' or ref.get('option_expiry') != plan['option_expiry']):
+            raise ValueError('Bucket reference provenance mismatch')
+        for key in ('reference_iv_pct', 'reference_forward'):
+            if not math.isfinite(float(ref[key])) or float(ref[key]) <= 0:
+                raise ValueError('Invalid bucket reference value')
+        targets, strikes = ref.get('moneyness_targets'), ref.get('reference_strikes')
+        if not targets or not strikes or len(targets) != len(strikes) or not all(math.isfinite(float(v)) for v in targets + strikes):
+            raise ValueError('Invalid bucket reference strikes')
+    return plan, refs
+
+
 def activate_references(store, plan, references):
     """Run on the event loop; invalidate old observations before recalculating."""
     tracker = store.iv_tracker

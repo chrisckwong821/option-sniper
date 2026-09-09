@@ -1,0 +1,10 @@
+[Unit]
+Description=Publish incremental bucket sigma every fifteen minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=15min
+Unit=bucket-worker.service
+
+[Install]
+WantedBy=timers.target

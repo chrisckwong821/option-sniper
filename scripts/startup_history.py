@@ -50,7 +50,7 @@ def ensure_bucket_statistics(root, state, allow_download=True):
         env['SIGMA_RECONSTRUCTION_MAX_COST'] = '0'
     with (root / 'bucket-reconstruction.log').open('w') as output:
         result = subprocess.run(command, cwd=Path(__file__).resolve().parents[1], env=env,
-                                stdout=output, stderr=subprocess.STDOUT, check=False, timeout=300)
+                                stdout=output, stderr=subprocess.STDOUT, check=False, timeout=900)
     if result.returncode:
         raise RuntimeError('Bucket reconstruction failed; see bucket-reconstruction.log. No further download fallback was attempted.')
     from .computed_cache import publish

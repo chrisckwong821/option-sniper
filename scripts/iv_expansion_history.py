@@ -781,6 +781,18 @@ class DownloadLedger:
         allowed = {"dataset", "start", "end", "symbols", "schema", "stype_in", "limit"}
         return {key: value for key, value in request.items() if key in allowed}
 
+    @staticmethod
+    def _frame(store, category):
+        if category != 'definitions' or not isinstance(store, db.DBNStore):
+            return store.to_df().reset_index()
+        # Definitions contain many wide/repeated records. Only OCC symbols are
+        # needed for contract selection; never materialize the full catalogue.
+        symbols = set()
+        for chunk in store.to_df(count=10000, map_symbols=False):
+            if 'raw_symbol' in chunk:
+                symbols.update(chunk['raw_symbol'].dropna().astype(str))
+        return pd.DataFrame({'raw_symbol': sorted(symbols)})
+
     def fetch_frame(
         self,
         client: Any,
@@ -804,7 +816,7 @@ class DownloadLedger:
                         "estimated_cost_usd": 0.0,
                         "path": str(path),
                     })
-                return db.DBNStore.from_file(path).to_df().reset_index()
+                return self._frame(db.DBNStore.from_file(path), category)
 
             if self.shared.enabled:
                 try:
@@ -815,7 +827,7 @@ class DownloadLedger:
                     root=self.shared.root, client=client, shared=self.shared)
                 before_cost, before_count = cached_client.download_cost, cached_client.download_count
                 try:
-                    return cached_client.get_range(**request).to_df().reset_index()
+                    return self._frame(cached_client.get_range(**request), category)
                 except Exception as exc:
                     if (getattr(exc, "http_status", None) == 422
                             and "symbology_invalid_request" in str(exc)
@@ -920,8 +932,8 @@ class DownloadLedger:
                 })
             if path.exists():
                 self.shared.put("history/" + path.resolve().relative_to(self.shared.root).as_posix(), path)
-                return db.DBNStore.from_file(path).to_df().reset_index()
-            return store.to_df().reset_index()
+                return self._frame(db.DBNStore.from_file(path), category)
+            return self._frame(store, category)
 
     def summary(self) -> dict[str, Any]:
         with self._lock:

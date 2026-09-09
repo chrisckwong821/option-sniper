@@ -1153,8 +1153,8 @@ def create_app(
             except Exception as exc:
                 expected_sigma.error = f"{type(exc).__name__}: {exc}"
             try:
-                from scripts.iv_reference_refresh import closing_references, activate_references
-                plan, references = await asyncio.to_thread(closing_references, expected_sigma)
+                from scripts.iv_reference_refresh import shared_references, activate_references
+                plan, references = await asyncio.to_thread(shared_references, expected_sigma)
                 activate_references(store, plan, references)
             except Exception as exc:
                 history_repair_status["reference_error"] = str(exc)
