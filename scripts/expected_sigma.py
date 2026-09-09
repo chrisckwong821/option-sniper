@@ -324,6 +324,8 @@ class ExpectedSigma:
         expiry = datetime.fromisoformat(plan["expiry_close"])
         rows = dict(cached_rows)
         for candidate in candidates:
+            if candidate["ticker"] in cached_rows:
+                continue  # Published daily values are shared, not re-fit per instance.
             estimate = estimate_option_iv(candidate, pairs.get(candidate["ticker"], []), (expiry - close).total_seconds() / YEAR_SECONDS)
             if estimate:
                 annualized = estimate["annualized_implied_vol_pct"]

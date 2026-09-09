@@ -333,3 +333,19 @@ class SharedSigmaTests(unittest.TestCase):
         saved = read_json(self.sigma.root / 'close-2026-09-08.json')
         self.assertEqual(saved['requested_tickers'], ['AAA', 'BBB'])
         self.assertEqual(len(saved['quotes']), 2)
+
+    def test_partial_refresh_preserves_published_sigma_for_covered_symbols(self):
+        self.configure_shared()
+        when = at('2026-09-09T04:12:00-04:00')
+        self.save(when.isoformat(), 2)
+        source = bundle()
+        source['today']['rows'].append(dict(ticker='BBB', last_price=200))
+        quote = dict(ts_recv='2026-09-08T19:59:59+00:00', symbol='AAA', bid_px_00=1, ask_px_00=2)
+        atomic_write_json(self.sigma.root / 'close-2026-09-08.json',
+            {'spots': {'AAA': 100, 'BBB': 200}, 'quotes': [quote], 'requested_tickers': ['AAA', 'BBB'], 'source': 'historical'})
+        with patch('scripts.expected_sigma.resolve_historical_api_keys', return_value=(None, None)), \
+             patch('scripts.expected_sigma.prepare_option_pairs', return_value=({}, {})), \
+             patch('scripts.expected_sigma.estimate_option_iv', return_value=None) as estimate:
+            self.sigma.refresh(source, when)
+        self.assertEqual([call.args[0]['ticker'] for call in estimate.call_args_list], ['BBB'])
+        self.assertEqual(self.sigma.apply(source, when)['today']['rows'][0]['sigma_1d_pct'], 2)
