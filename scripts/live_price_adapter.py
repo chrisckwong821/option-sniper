@@ -28,13 +28,15 @@ except ImportError:
 
 try:
     from .option_contract_catalog import (
-        fetch_option_contract_catalog,
+        LiveOptionCatalog,
+        atomic_write_catalog,
         load_option_contract_catalog,
         plan_option_subscriptions,
     )
 except ImportError:
     from option_contract_catalog import (
-        fetch_option_contract_catalog,
+        LiveOptionCatalog,
+        atomic_write_catalog,
         load_option_contract_catalog,
         plan_option_subscriptions,
     )
@@ -676,7 +678,9 @@ class DatabentoOptionFeed:
         stop: asyncio.Event,
         subscription_chunk_size: int = 2_000,
         symbol_provider: Callable[[], list[str]] | None = None,
-        replan_interval_seconds: float = 30.0,
+        replan_interval_seconds: float = 300.0,
+        definition_parents: list[str] | None = None,
+        definition_callback: Callable[[Any], None] | None = None,
     ) -> None:
         self.api_key = api_key
         self.symbols = set(symbols)
@@ -687,6 +691,9 @@ class DatabentoOptionFeed:
         self.symbol_provider = symbol_provider
         self.replan_interval_seconds = replan_interval_seconds
         self.client: db.Live | None = None
+        self.definition_parents = definition_parents or []
+        self.definition_callback = definition_callback
+        self.last_plan = {}
 
     def _subscribe(
         self,
@@ -714,34 +721,52 @@ class DatabentoOptionFeed:
             slow_reader_behavior="skip",
         )
         replay_start = (utc_now() - timedelta(minutes=self.replay_minutes)) if self.replay_minutes > 0 else None
+        if self.definition_parents:
+            client.subscribe(dataset="OPRA.PILLAR", schema="definition",
+                             symbols=self.definition_parents, stype_in="parent", start=0)
         self._subscribe(client, sorted(self.symbols), replay_start=replay_start)
         return client
 
     async def refresh_subscriptions(self) -> None:
         if self.symbol_provider is None:
             return
+        delay = self.replan_interval_seconds if self.last_plan else min(15.0, self.replan_interval_seconds)
         while not self.stop.is_set() and self.client is not None:
             try:
                 await asyncio.wait_for(
                     self.stop.wait(),
-                    timeout=self.replan_interval_seconds,
+                    timeout=delay,
                 )
             except asyncio.TimeoutError:
                 pass
             if self.stop.is_set() or self.client is None:
                 break
-            additions = sorted(set(self.symbol_provider()) - self.symbols)
-            if not additions:
-                continue
-            # Databento accepts additional subscriptions after a session has
-            # started, but intraday replay cannot be requested for additions.
-            self._subscribe(self.client, additions, replay_start=None)
-            self.symbols.update(additions)
-            self.store.set_feed_status(
-                "OPRA.PILLAR",
-                "subscribed",
-                f"{len(self.symbols)} definition-backed same-expiry contracts",
-            )
+            delay = self.replan_interval_seconds
+            started = asyncio.get_running_loop().time()
+            try:
+                desired = set(self.symbol_provider())
+                if not desired:
+                    continue  # Retain a working feed when discovery has no coverage.
+                additions = sorted(desired - self.symbols)
+                removals = self.symbols - desired
+                self.last_plan = {
+                    "checked_at": utc_now().isoformat(),
+                    "duration_ms": (asyncio.get_running_loop().time() - started) * 1000,
+                    "added": len(additions), "removed": len(removals),
+                    "desired_contracts": len(desired),
+                }
+                if removals:
+                    # Live has no unsubscribe. Close this session and let run()
+                    # reconnect with the exact desired set, preserving quote caches.
+                    self.symbols = desired
+                    self.client.terminate()
+                    return
+                if additions:
+                    self._subscribe(self.client, additions, replay_start=None)
+                    self.symbols.update(additions)
+            except Exception as exc:
+                self.last_plan["error"] = f"{type(exc).__name__}: {exc}"
+
 
     async def connect_without_blocking_server(self) -> db.Live:
         loop = asyncio.get_running_loop()
@@ -803,7 +828,10 @@ class DatabentoOptionFeed:
                         if self.stop.is_set():
                             self.client.stop()
                             break
-                        if isinstance(record, db.SymbolMappingMsg):
+                        if isinstance(record, db.InstrumentDefMsg):
+                            if self.definition_callback is not None:
+                                self.definition_callback(record)
+                        elif isinstance(record, db.SymbolMappingMsg):
                             mapped_symbol = getattr(record, "stype_out_symbol", None)
                             input_symbol = getattr(record, "stype_in_symbol", None)
                             raw_symbol = str(mapped_symbol or input_symbol or "").rstrip("\x00")
@@ -1016,6 +1044,12 @@ def create_app(
         "plans": {},
     }
 
+    live_catalog = LiveOptionCatalog(universe["rows"], option_expiry)
+    catalog_revision = -1
+
+    def receive_definition(record):
+        live_catalog.update(record.raw_symbol, str(record.security_update_action) == "D")
+
     def current_spot_prices() -> dict[str, Any]:
         return {
             ticker: point.get("price")
@@ -1023,12 +1057,33 @@ def create_app(
         }
 
     def planned_option_symbols() -> list[str]:
+        nonlocal catalog_revision
+        if live_catalog.symbols and live_catalog.revision != catalog_revision:
+            option_runtime["catalog"] = live_catalog.payload()
+            catalog_revision = live_catalog.revision
+            # Persist away from the event loop; the live stream remains authoritative.
+            try:
+                asyncio.get_running_loop().create_task(asyncio.to_thread(
+                    atomic_write_catalog, option_catalog_path, option_runtime["catalog"]))
+            except RuntimeError:
+                pass
         catalog = option_runtime["catalog"]
         if catalog is None:
             option_runtime["plans"] = {}
             return option_contract_symbols(universe["rows"])
+        rows = []
+        for row in universe["rows"]:
+            reference = iv_tracker.references.get(row["ticker"])
+            if reference:
+                # The shared baseline can advance without restarting the app.
+                # Current forward is approximated by spot; the live IV fit then
+                # derives its own forward from call/put parity.
+                row = {**row, "iv_expansion_reference": {
+                    "log_moneyness": reference["moneyness_targets"],
+                }}
+            rows.append(row)
         catalog_symbols, plans = plan_option_subscriptions(
-            universe["rows"],
+            rows,
             catalog,
             spot_prices=current_spot_prices(),
         )
@@ -1086,9 +1141,11 @@ def create_app(
             "calculation_interval_seconds": iv_tracker.calculation_interval_seconds,
             "pending_calculations": len(iv_tracker.pending_calculations),
             "method": "moneyness-matched-black76-v1",
+            "subscription_refresh_seconds": 300,
+            "subscription_plan": option_runtime["feed"].last_plan if option_runtime["feed"] else {},
             "contract_catalog": {
                 "source": (
-                    "definition"
+                    option_runtime["catalog"].get("source", "definition")
                     if option_runtime["catalog"] is not None
                     else "historical_quote_pairs"
                 ),
@@ -1217,8 +1274,8 @@ def create_app(
                         "connecting",
                         "Discovering listed same-expiry contracts",
                     )
-                    # Serving hosts use retained contracts. Historical discovery
-                    # and bucket reconstruction belong to the dedicated worker.
+                    # Discover contracts through the existing live entitlement.
+                    # Bucket reconstruction remains exclusively on referral2.
                     symbols_for_feed = planned_option_symbols()
                     if not symbols_for_feed:
                         store.set_feed_status(
@@ -1234,6 +1291,8 @@ def create_app(
                         replay_minutes=getattr(args, "option_replay_minutes", 0),
                         stop=stop,
                         symbol_provider=planned_option_symbols,
+                        definition_parents=sorted({f"{row['ticker']}.OPT" for row in universe["rows"]}),
+                        definition_callback=receive_definition,
                     )
                     option_runtime["feed"] = option_feed
                     await option_feed.run()

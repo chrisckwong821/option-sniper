@@ -1,0 +1,32 @@
+{
+  "captured_at": "2026-09-09T15:52:18.659494+00:00",
+  "universe_count": 418,
+  "shown_count": 403,
+  "missing": [
+    "ACI",
+    "BEKE",
+    "BKNG",
+    "CART",
+    "DBX",
+    "GRAB",
+    "JOBY",
+    "LI",
+    "LUMN",
+    "MDLZ",
+    "NIO",
+    "OWL",
+    "SNAP",
+    "STLA",
+    "XP"
+  ],
+  "subscribed_contracts": 15540,
+  "benchmark": {
+    "rows": 418,
+    "covered_tickers": 413,
+    "listed_pairs": 25087,
+    "selected_contracts": 5594,
+    "median_ms": 3.686,
+    "p95_ms": 3.881,
+    "temporary_peak_mb": 0.852
+  }
+}

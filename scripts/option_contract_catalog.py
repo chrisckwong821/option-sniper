@@ -273,3 +273,39 @@ def plan_option_subscriptions(
         }
 
     return sorted(symbols), plans
+
+
+class LiveOptionCatalog:
+    """Retain only the selected expiry from the live definition stream."""
+
+    def __init__(self, rows, option_expiry):
+        self.rows = rows
+        self.expiry = _as_date(option_expiry)
+        self.expiry_code = self.expiry.strftime("%y%m%d")
+        self.roots = _root_map(rows)
+        self.symbols = set()
+        self.revision = 0
+
+    def update(self, raw_symbol, deleted=False):
+        raw_symbol = str(raw_symbol).rstrip("\x00")
+        # Discard other expiries before parsing or allocating retained state.
+        if raw_symbol[6:12] != self.expiry_code:
+            return
+        parsed = parse_occ_symbol(raw_symbol)
+        if parsed is None or normalize_symbol(parsed["root"]) not in self.roots:
+            return
+        if deleted:
+            if raw_symbol in self.symbols:
+                self.symbols.remove(raw_symbol)
+                self.revision += 1
+        elif raw_symbol not in self.symbols:
+            self.symbols.add(raw_symbol)
+            self.revision += 1
+
+    def payload(self):
+        payload = build_option_contract_catalog(
+            ({"raw_symbol": symbol} for symbol in self.symbols), self.rows,
+            as_of_date=datetime.now(UTC).date(), option_expiry=self.expiry,
+        )
+        payload["source"] = "live_definition"
+        return payload
