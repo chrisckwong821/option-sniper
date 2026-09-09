@@ -101,6 +101,28 @@ test("the open dashboard replaces yesterday rows while preserving today's object
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../dashboard/app.js"), "utf8"), context);
   // Layout is outside this regression; run the actual state and price update functions.
   vm.runInContext("render = () => {};", context);
+  // Cached IV values and their score details must not leak into pre-market cells.
+  const ivRow = {
+    dashboard_view: "today", iv_expansion_pct: 18,
+    iv_expansion_timestamp: "2026-08-26T19:30:00Z",
+    iv_expansion_bucket_score: { z: 2.3, bucket: "15:30", n: 42,
+      observation_date: "2026-08-26", calibration_date: "2026-08-25" },
+  };
+  context.ivRow = ivRow;
+  const originalIvRow = JSON.stringify(ivRow);
+  vm.runInContext("state.live.marketSession = 'premarket'", context);
+  const premarketIv = vm.runInContext("ivExpansionMarkup(ivRow)", context);
+  assert.match(premarketIv, /Options trading hours only/);
+  assert.match(premarketIv, /Readings are hidden during pre-market/);
+  assert.doesNotMatch(premarketIv, /18\.0%|2\.3σ|15:30|2026-08-26|2026-08-25|42 historical/);
+  assert.equal(JSON.stringify(ivRow), originalIvRow);
+  for (const session of ["regular", "afterhours"]) {
+    vm.runInContext(`state.live.marketSession = '${session}'`, context);
+    const iv = vm.runInContext("ivExpansionMarkup(ivRow)", context);
+    assert.match(iv, /\+18\.0%/);
+    assert.match(iv, /\+2\.3σ/);
+  }
+  vm.runInContext("state.live.marketSession = 'snapshot'", context);
   await vm.runInContext("refreshDashboardState()", context);
   vm.runInContext(`
     state.payload.rows = [

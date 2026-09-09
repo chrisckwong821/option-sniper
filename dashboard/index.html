@@ -138,7 +138,7 @@
                 <th class="numeric"><button class="sort-button term-tip" data-sort="gain_pct" data-tooltip="The latest completed session's close-to-close move. Once the next session trades, this updates versus that completed close; pre-market and overnight moves appear separately." type="button">Gain</button></th>
                 <th class="numeric"><button class="sort-button term-tip" data-sort="sigma_1d_pct" data-tooltip="Option-implied expected move from the latest regular close to the target close. Annualized IV is scaled by sqrt(actual elapsed calendar time / 365), so weekends and market holidays use a longer horizon." type="button">Expected &sigma;</button></th>
                 <th><button class="sort-button term-tip active" data-sort="z_score" data-tooltip="Live log return since the latest regular close divided by Expected sigma for the full next-close horizon. Premarket and intraday returns are partial moves compared with that full-horizon expectation." type="button">Z-score</button></th>
-                <th><button class="sort-button term-tip iv-expansion-heading" data-sort="iv_expansion_pct" data-tooltip="Annualized same-expiry IV versus yesterday's snapshot. If yesterday is unavailable, the newest compatible historical pair is shown and labeled as fallback. The last valid value persists after options close." type="button">IV Expansion <small>/ Bucket σ</small></button></th>
+                <th><button class="sort-button term-tip iv-expansion-heading" data-sort="iv_expansion_pct" data-tooltip="Updates only during options trading hours. Annualized same-expiry IV versus yesterday's snapshot. If yesterday is unavailable, the newest compatible historical pair is shown and labeled as fallback. Readings are hidden during pre-market. The last valid value persists after options close." type="button">IV Expansion <small>/ Bucket σ</small></button></th>
                 <th><span class="term-tip label-tip" tabindex="0" data-tooltip="Confidence in the IV denominator. High uses several tight two-sided strikes; medium has more spread sensitivity; low is provisional.">IV Reliability</span></th>
               </tr>
             </thead>
@@ -148,6 +148,7 @@
         </div>
         <details class="iv-reading-help">
           <summary>How to read IV Expansion + Bucket σ</summary>
+          <p>IV Expansion updates only during options trading hours. Readings are hidden during pre-market to avoid showing yesterday’s data. After the market closes, the last available reading stays visible. If no reading is available, check back during the next options session.</p>
           <p><strong>IV Expansion</strong> shows how much IV changed. <strong>Bucket σ</strong> shows how unusual its log change is for the same stock, time bucket and expiry-tenor group.</p>
           <p>Illustration: <strong>+18% / +0.6σ</strong> is a large change near that stock’s usual pattern; <strong>+5% / +3.1σ</strong> is a smaller change far above its own historical median.</p>
           <p>Both readings use the same observation. σ uses median and 1.4826 × MAD, not the price Z-score. Missing history is unscored; * marks provisional quote quality.</p>
@@ -183,6 +184,6 @@
     <div id="live-announcer" class="visually-hidden" aria-live="polite"></div>
     <script src="live-calculations.js?v=a0ddd7199ef7f032"></script>
     <script src="state-refresh.js?v=0972f8dd1d417470"></script>
-    <script src="app.js?v=178b0ef31b9c2bad"></script>
+    <script src="app.js?v=577278db62a1535c"></script>
   </body>
 </html>

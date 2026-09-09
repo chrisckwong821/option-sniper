@@ -420,16 +420,20 @@ function gainStackMarkup(row) {
 
 function ivExpansionMarkup(row) {
   if (row.dashboard_view !== "today") return "";
-  const rawValue = row.iv_expansion_pct;
+  const isPremarket = state.live.marketSession === "premarket";
+  const rawValue = isPremarket ? null : row.iv_expansion_pct;
   const value = Number(rawValue);
   const hasValue = rawValue !== null && rawValue !== undefined && Number.isFinite(value);
-  const bucketScore = row.iv_expansion_bucket_score;
+  const bucketScore = isPremarket ? null : row.iv_expansion_bucket_score;
   const z = bucketScore?.z;
   const scored = hasValue && typeof z === "number" && Number.isFinite(z);
   const scoreLabel = scored ? formatSigned(z, 1, "σ") : "—";
+  const availabilityTip = "IV Expansion updates only during options trading hours. Readings are hidden during pre-market. The last available reading is shown after the market closes.";
   const scoreTip = bucketScore
     ? `${bucketScore.bucket || "No matched"} ET bucket · ${bucketScore.n || 0} historical observations. ${bucketScore.reason || ""} Calibration: ${bucketScore.calibration_date || "unknown"}. ${bucketScore.indicative ? "Indicative: within-bucket quote compared with historical bucket-end samples." : ""} ${bucketScore.is_stale ? "Saved/stale quote; bucket follows the observation timestamp, not the current clock." : ""} ${bucketScore.provisional ? "Provisional: low quote reliability." : ""}`
-    : "Bucket sigma is unavailable from the current backend session.";
+    : hasValue
+      ? "Bucket σ is not yet available for this reading. It requires matching historical observations."
+      : availabilityTip + " Bucket σ appears once an IV reading and matching history are available.";
   let bucketLabel = "";
   if (bucketScore?.bucket && /^\d{2}:\d{2}$/.test(bucketScore.bucket)) {
     const [hour, minute] = bucketScore.bucket.split(":").map(Number);
@@ -463,7 +467,7 @@ function ivExpansionMarkup(row) {
       + (row.iv_expansion_observation_session
         ? " Observation session " + row.iv_expansion_observation_session + "."
         : "")
-    : "Waiting for fresh same-expiry call and put quotes at the reference moneyness points.";
+    : availabilityTip + " Waiting for fresh same-expiry call and put quotes.";
 
   return '<td class="iv-expansion-cell ' + (hasValue ? "" : "waiting")
     + '" title="' + escapeHtml(methodology) + '">'
@@ -474,7 +478,7 @@ function ivExpansionMarkup(row) {
     + (scored && bucketScore.indicative ? "≈" : "") + scoreLabel + (scored && bucketScore.provisional ? "*" : "") + '</span>'
     + '</span>'
     + '<span class="iv-expansion-meta">'
-    + (hasValue ? escapeHtml([provenance, bucketScore?.is_stale ? "STALE" : "", bucketScore?.observation_date || "", bucketLabel, "mark " + timestamp].filter(Boolean).join(" · ")) : "Awaiting options") + "</span></td>";
+    + (hasValue ? escapeHtml([provenance, bucketScore?.is_stale ? "STALE" : "", bucketScore?.observation_date || "", bucketLabel, "mark " + timestamp].filter(Boolean).join(" · ")) : state.live.marketSession === "regular" ? "Awaiting options quotes" : "Options trading hours only") + "</span></td>";
 }
 
 function rowMarkup(row, viewRank) {
