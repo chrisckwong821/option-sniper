@@ -4,7 +4,7 @@ const state = {
   cache: null,
   refreshPlan: null,
   rowsByTicker: new Map(),
-  view: "yesterday",
+  view: "today",
   search: "",
   sector: "all",
   reliability: "all",
