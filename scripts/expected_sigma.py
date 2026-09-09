@@ -279,26 +279,28 @@ class ExpectedSigma:
         covered = set(inputs.get("requested_tickers", []))
         if inputs.get("source") == "live_replay" and not inputs.get("replay_verified"):
             covered = set()
-        if not set(tickers).issubset(covered):
+        missing_quotes = sorted(set(tickers) - covered)
+        if missing_quotes:
             live_key = resolve_live_option_api_key()
             quotes = []
             replay_error = None
             if live_key and now - (close - timedelta(minutes=1)) < timedelta(hours=24):
                 try:
-                    quotes = replay_quotes(live_key, tickers, close, contracts=contracts)
+                    quotes = replay_quotes(live_key, missing_quotes, close, contracts=contracts)
                     source = "live_replay"
                 except Exception as exc:
                     replay_error = exc
             if not quotes:
                 if not historical_key:
                     raise RuntimeError("Closing option quotes unavailable; historical fallback key is missing") from replay_error
-                quotes = historical_quotes(historical_key, tickers, close, self.max_option_cost,
+                quotes = historical_quotes(historical_key, missing_quotes, close, self.max_option_cost,
                                            expiry=plan["option_expiry"], contracts=contracts)
                 source = "historical"
             if not quotes:
                 raise RuntimeError("No closing option quotes returned")
-            inputs = {"spots": spots, "quotes": quotes, "requested_tickers": tickers, "source": source,
-                      "replay_verified": source == "live_replay"}
+            inputs = merge_closing_inputs(inputs, {"spots": spots, "quotes": quotes,
+                "requested_tickers": missing_quotes, "source": source, "replay_verified": source == "live_replay"})
+            quotes = inputs["quotes"]
             atomic_write_json(inputs_path, inputs)
         # Save OPRA replay first, even if the equity daily bars are not yet
         # available. A delayed spot response must not lose the replay window.

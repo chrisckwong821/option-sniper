@@ -313,3 +313,23 @@ class SharedSigmaTests(unittest.TestCase):
                         'trading_date': '2026-09-08', 'ts_event': '2026-09-08T19:59:55+00:00'}})
             from scripts.expected_sigma import read_json
             self.assertEqual(read_json(other.root / 'close-2026-09-08.json')['spots']['AAA'], 100)
+
+    def test_new_symbols_do_not_redownload_cached_option_quotes(self):
+        self.configure_shared()
+        when = at('2026-09-09T04:12:00-04:00')
+        source = bundle()
+        source['today']['rows'].append(dict(ticker='BBB', last_price=200))
+        quote = dict(ts_recv='2026-09-08T19:59:59+00:00', symbol='AAA', bid_px_00=1, ask_px_00=2)
+        atomic_write_json(self.sigma.root / 'close-2026-09-08.json',
+            {'spots': {'AAA': 100}, 'quotes': [quote], 'requested_tickers': ['AAA'], 'source': 'historical'})
+        with patch('scripts.expected_sigma.resolve_live_option_api_key', return_value='test'), \
+             patch('scripts.expected_sigma.resolve_historical_api_keys', return_value=(None, None)), \
+             patch('scripts.expected_sigma.replay_quotes', return_value=[{**quote, 'symbol': 'BBB'}]) as replay, \
+             patch('scripts.expected_sigma.prepare_option_pairs', return_value=({}, {})), \
+             patch('scripts.expected_sigma.estimate_option_iv', return_value=None):
+            self.sigma.refresh(source, when)
+        self.assertEqual(replay.call_args.args[1], ['BBB'])
+        from scripts.expected_sigma import read_json
+        saved = read_json(self.sigma.root / 'close-2026-09-08.json')
+        self.assertEqual(saved['requested_tickers'], ['AAA', 'BBB'])
+        self.assertEqual(len(saved['quotes']), 2)
