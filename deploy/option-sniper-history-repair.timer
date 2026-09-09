@@ -1,0 +1,10 @@
+[Unit]
+Description=Retry shared Option Sniper history repair
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=15min
+Unit=option-sniper-history-repair.service
+
+[Install]
+WantedBy=timers.target

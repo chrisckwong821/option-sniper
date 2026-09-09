@@ -1132,24 +1132,7 @@ def create_app(
             return web.Response(status=304, headers=headers)
         return web.json_response(payload, headers=headers)
 
-    history_repair_status = {"state": "pending", "error": None}
-
-    async def history_repair_loop() -> None:
-        from scripts.startup_history import ensure_bucket_statistics
-        while not stop.is_set():
-            history_repair_status.update(state="running", error=None)
-            try:
-                await asyncio.to_thread(ensure_bucket_statistics, args.state_cache.parent,
-                                        state_bundle, allow_download=True)
-                await calibration_refresh.check()
-                history_repair_status.update(state="ready", error=None)
-                state_bundle.setdefault("cache", {}).pop("history_error", None)
-            except Exception as exc:
-                history_repair_status.update(state="retained", error=str(exc))
-            try:
-                await asyncio.wait_for(stop.wait(), timeout=900)
-            except asyncio.TimeoutError:
-                pass
+    history_repair_status = {"state": "external_worker", "error": None}
 
     async def expected_sigma_loop() -> None:
         from scripts.expected_sigma import next_activation
@@ -1201,7 +1184,6 @@ def create_app(
         tasks.append(asyncio.create_task(calibration_refresh.run(stop), name="calibration-refresh"))
         if not args.mock:
             tasks.append(asyncio.create_task(expected_sigma_loop(), name="expected-sigma"))
-            tasks.append(asyncio.create_task(history_repair_loop(), name="history-repair"))
         if args.mock:
             tasks.append(asyncio.create_task(mock_feed(universe, store, stop), name="mock-feed"))
         else:
