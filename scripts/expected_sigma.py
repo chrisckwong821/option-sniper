@@ -25,6 +25,8 @@ from .nasdaq_universe_movers import estimate_option_iv, prepare_option_pairs, fe
 EASTERN = ZoneInfo("America/New_York")
 VERSION = "previous-close-premarket-v1"
 YEAR_SECONDS = 365 * 86400
+PRIMARY_CLOSE_WINDOW_MINUTES = 1
+FALLBACK_CLOSE_WINDOW_MINUTES = 15
 
 
 def sigma_plan(now=None):
@@ -94,7 +96,41 @@ def merge_closing_inputs(previous, incoming):
     return {**previous, **incoming,
             "quotes": list(quotes.values()),
             "spots": {**previous.get("spots", {}), **incoming.get("spots", {})},
-            "requested_tickers": sorted(set(previous.get("requested_tickers", [])) | set(incoming.get("requested_tickers", [])))}
+            "requested_tickers": sorted(set(previous.get("requested_tickers", [])) | set(incoming.get("requested_tickers", []))),
+            "fallback_requested_tickers": sorted(
+                set(previous.get("fallback_requested_tickers", []))
+                | set(incoming.get("fallback_requested_tickers", []))
+            )}
+
+
+def latest_closing_estimates(quotes, candidates, option_expiry, close, window_minutes,
+                             year_fraction):
+    """Fit each ticker at its newest minute that yields a valid IV estimate."""
+    if quotes.empty or "ts_recv" not in quotes.columns:
+        return {}, {}
+    frame = quotes.copy()
+    frame["ts_recv"] = pd.to_datetime(frame["ts_recv"], utc=True)
+    close_stamp = pd.Timestamp(close)
+    frame = frame[
+        (frame["ts_recv"] >= close_stamp - pd.Timedelta(minutes=window_minutes))
+        & (frame["ts_recv"] <= close_stamp)
+    ]
+    if frame.empty:
+        return {}, {}
+    remaining = {row["ticker"]: row for row in candidates}
+    selected, selected_times = {}, {}
+    for stamp in sorted(frame["ts_recv"].unique(), reverse=True):
+        if not remaining:
+            break
+        minute = frame[frame["ts_recv"] == stamp]
+        pairs, _ = prepare_option_pairs(minute, list(remaining.values()), option_expiry)
+        for ticker, candidate in list(remaining.items()):
+            estimate = estimate_option_iv(candidate, pairs.get(ticker, []), year_fraction)
+            if estimate:
+                selected[ticker] = estimate
+                selected_times[ticker] = pd.Timestamp(stamp).isoformat()
+                remaining.pop(ticker, None)
+    return selected, selected_times
 
 
 def replay_quotes(key, tickers, close, timeout=60, *, contracts=None):
@@ -146,7 +182,8 @@ def replay_quotes(key, tickers, close, timeout=60, *, contracts=None):
     return list(quotes.values())
 
 
-def historical_quotes(key, tickers, close, max_cost, *, expiry=None, contracts=None):
+def historical_quotes(key, tickers, close, max_cost, *, expiry=None, contracts=None,
+                      window_minutes=PRIMARY_CLOSE_WINDOW_MINUTES, cost_tracker=None):
     contracts = contracts or {}
     requests = []
     for offset in range(0, len(tickers), 20):
@@ -156,15 +193,18 @@ def historical_quotes(key, tickers, close, max_cost, *, expiry=None, contracts=N
         for stype, symbols in (("raw_symbol", raw), ("parent", parents)):
             if symbols:
                 requests.append(dict(dataset="OPRA.PILLAR", schema="cbbo-1m", stype_in=stype,
-                                     symbols=symbols, start=close - timedelta(minutes=1),
+                                     symbols=symbols, start=close - timedelta(minutes=window_minutes),
                                      end=close + timedelta(seconds=1)))
     # Preflight the total before downloading any chunk. A whole-universe parent
     # query can time out even for a single closing minute.
     with ThreadPoolExecutor(max_workers=4) as pool:
         costs = list(pool.map(lambda request: float(db.Historical(key).metadata.get_cost(**request)), requests))
     total = sum(costs)
-    if not math.isfinite(total) or total > max_cost:
+    spent = sum(cost_tracker or [])
+    if not math.isfinite(total) or total + spent > max_cost:
         raise RuntimeError("Closing option quote request exceeds configured cost limit")
+    if cost_tracker is not None:
+        cost_tracker.append(total)
 
     def download(request):
         frame = db.Historical(key).timeseries.get_range(**request).to_df().reset_index()
@@ -274,6 +314,7 @@ class ExpectedSigma:
                     if value and math.isfinite(float(value)) and float(value) > 0:
                         spots.setdefault(row["ticker"], float(value))
         spot_key, historical_key = resolve_historical_api_keys()
+        option_costs = []
         atomic_write_json(inputs_path, {**inputs, "spots": spots})
         quotes = inputs.get("quotes", [])
         covered = set(inputs.get("requested_tickers", []))
@@ -294,7 +335,8 @@ class ExpectedSigma:
                 if not historical_key:
                     raise RuntimeError("Closing option quotes unavailable; historical fallback key is missing") from replay_error
                 quotes = historical_quotes(historical_key, missing_quotes, close, self.max_option_cost,
-                                           expiry=plan["option_expiry"], contracts=contracts)
+                                           expiry=plan["option_expiry"], contracts=contracts,
+                                           cost_tracker=option_costs)
                 source = "historical"
             if not quotes:
                 raise RuntimeError("No closing option quotes returned")
@@ -316,22 +358,63 @@ class ExpectedSigma:
                         spots[row["symbol"]] = float(row["close"])
                 atomic_write_json(inputs_path, {**inputs, "spots": spots})
         candidates = [{"ticker": t, "anchor_price": spots[t]} for t in tickers if t in spots]
-        frame = pd.DataFrame(quotes)
-        # Apply the same close window to cached, replayed and historical inputs.
-        stamps = pd.to_datetime(frame["ts_recv"], utc=True)
-        frame = frame[(stamps >= close - timedelta(minutes=1)) & (stamps <= close)]
-        pairs, _ = prepare_option_pairs(frame, candidates, pd.Timestamp(plan["option_expiry"]).date())
         expiry = datetime.fromisoformat(plan["expiry_close"])
+        expiry_date = pd.Timestamp(plan["option_expiry"]).date()
+        years = (expiry - close).total_seconds() / YEAR_SECONDS
+        pending = [candidate for candidate in candidates if candidate["ticker"] not in cached_rows]
+        primary_estimates, quote_times = latest_closing_estimates(
+            pd.DataFrame(quotes), pending, expiry_date, close,
+            PRIMARY_CLOSE_WINDOW_MINUTES, years,
+        )
+        estimates = {
+            ticker: (estimate, quote_times.get(ticker))
+            for ticker, estimate in primary_estimates.items()
+        }
+
+        unresolved = [candidate for candidate in pending if candidate["ticker"] not in estimates]
+        fallback_covered = set(inputs.get("fallback_requested_tickers", []))
+        fallback_missing = sorted(
+            candidate["ticker"] for candidate in unresolved
+            if candidate["ticker"] not in fallback_covered
+        )
+        if fallback_missing and historical_key:
+            fallback_contracts = {ticker: contracts.get(ticker, []) for ticker in fallback_missing}
+            fallback_quotes = historical_quotes(
+                historical_key, fallback_missing, close, self.max_option_cost,
+                expiry=plan["option_expiry"], contracts=fallback_contracts,
+                window_minutes=FALLBACK_CLOSE_WINDOW_MINUTES, cost_tracker=option_costs,
+            )
+            inputs = merge_closing_inputs(inputs, {
+                "spots": spots,
+                "quotes": fallback_quotes,
+                "requested_tickers": [],
+                "fallback_requested_tickers": fallback_missing,
+                "source": "historical",
+            })
+            quotes = inputs["quotes"]
+            atomic_write_json(inputs_path, inputs)
+
+        if unresolved:
+            fallback_estimates, fallback_times = latest_closing_estimates(
+                pd.DataFrame(quotes), unresolved, expiry_date, close,
+                FALLBACK_CLOSE_WINDOW_MINUTES, years,
+            )
+            for ticker, estimate in fallback_estimates.items():
+                estimates[ticker] = (estimate, fallback_times.get(ticker))
+
         rows = dict(cached_rows)
-        for candidate in candidates:
-            if candidate["ticker"] in cached_rows:
-                continue  # Published daily values are shared, not re-fit per instance.
-            estimate = estimate_option_iv(candidate, pairs.get(candidate["ticker"], []), (expiry - close).total_seconds() / YEAR_SECONDS)
-            if estimate:
+        for candidate in pending:
+            fitted = estimates.get(candidate["ticker"])
+            if fitted:
+                estimate, quote_time = fitted
                 annualized = estimate["annualized_implied_vol_pct"]
                 rows[candidate["ticker"]] = {"annualized_implied_vol_pct": annualized,
                     "sigma_1d_pct": annualized * math.sqrt(plan["year_fraction"]),
-                    "iv_reliability": estimate["iv_reliability"]}
+                    "iv_reliability": estimate["iv_reliability"],
+                    "iv_quote_time": quote_time,
+                    "iv_quote_age_minutes": (
+                        close - datetime.fromisoformat(quote_time)
+                    ).total_seconds() / 60 if quote_time else None}
         atomic_write_json(path, {"plan": plan, "rows": rows, "source": inputs.get("source")})
         self.publish(plan)
         self.error = None if all(t in rows for t in tickers) else f"Closing IV unavailable for {len(set(tickers) - set(rows))} symbols"

@@ -120,7 +120,38 @@ class SigmaTests(unittest.TestCase):
              patch('scripts.expected_sigma.prepare_option_pairs', return_value=({}, {})), \
              patch('scripts.expected_sigma.estimate_option_iv', return_value=None):
             self.sigma.refresh(bundle(), at('2026-09-09T04:12:00-04:00'))
-        historical.assert_called_once()
+        self.assertEqual(historical.call_count, 2)
+        self.assertEqual(historical.call_args_list[1].kwargs['window_minutes'], 15)
+
+    def test_unpaired_close_uses_latest_coherent_fallback_minute(self):
+        from scripts.iv_expansion import format_occ_symbol
+        call = format_occ_symbol('AAA', '2026-09-11', 'C', 105)
+        put = format_occ_symbol('AAA', '2026-09-11', 'P', 105)
+        close_quotes = [
+            dict(ts_recv='2026-09-08T20:00:00+00:00', symbol=call,
+                 bid_px_00=float('nan'), ask_px_00=2.2),
+            dict(ts_recv='2026-09-08T20:00:00+00:00', symbol=put,
+                 bid_px_00=1.0, ask_px_00=1.2),
+        ]
+        earlier_quotes = [
+            dict(ts_recv='2026-09-08T19:54:00+00:00', symbol=call,
+                 bid_px_00=2.0, ask_px_00=2.2),
+            dict(ts_recv='2026-09-08T19:54:00+00:00', symbol=put,
+                 bid_px_00=1.0, ask_px_00=1.2),
+        ]
+        with patch('scripts.expected_sigma.resolve_live_option_api_key', return_value='live'), \
+             patch('scripts.expected_sigma.resolve_historical_api_keys', return_value=(None, 'history')), \
+             patch('scripts.expected_sigma.replay_quotes', return_value=close_quotes), \
+             patch('scripts.expected_sigma.historical_quotes', return_value=earlier_quotes) as historical:
+            self.sigma.refresh(bundle(), at('2026-09-09T04:12:00-04:00'))
+        row = self.sigma.apply(bundle(), at('2026-09-09T04:13:00-04:00'))['today']['rows'][0]
+        self.assertEqual(row['expected_sigma_status'], 'fresh')
+        saved = __import__('scripts.expected_sigma', fromlist=['read_json']).read_json(
+            self.sigma.root / '2026-09-09.json'
+        )['rows']['AAA']
+        self.assertEqual(saved['iv_quote_time'], '2026-09-08T19:54:00+00:00')
+        self.assertEqual(saved['iv_quote_age_minutes'], 6)
+        self.assertEqual(historical.call_args.kwargs['window_minutes'], 15)
 
     def test_quotes_persist_even_when_spot_is_not_ready(self):
         quotes = [dict(ts_recv='2026-09-08T19:59:59+00:00', symbol='AAA', bid_px_00=1, ask_px_00=2)]
@@ -169,6 +200,23 @@ class SigmaTests(unittest.TestCase):
                 historical_quotes('test', ['AAA'], at('2026-09-08T20:00:00+00:00'), 5)
         client.timeseries.get_range.assert_not_called()
 
+    def test_historical_cost_guard_spans_primary_and_fallback(self):
+        import pandas as pd
+        from unittest.mock import MagicMock
+        from scripts.expected_sigma import historical_quotes
+        client = MagicMock()
+        client.metadata.get_cost.return_value = 3
+        client.timeseries.get_range.return_value.to_df.return_value = pd.DataFrame()
+        costs = []
+        with patch('scripts.expected_sigma.db.Historical', return_value=client):
+            historical_quotes('test', ['AAA'], at('2026-09-08T20:00:00+00:00'), 5,
+                              cost_tracker=costs)
+            with self.assertRaisesRegex(RuntimeError, 'cost limit'):
+                historical_quotes('test', ['BBB'], at('2026-09-08T20:00:00+00:00'), 5,
+                                  window_minutes=15, cost_tracker=costs)
+        self.assertEqual(costs, [3])
+        self.assertEqual(client.timeseries.get_range.call_count, 1)
+
     def test_known_contracts_use_bounded_minute_requests(self):
         import pandas as pd
         from unittest.mock import MagicMock
@@ -184,6 +232,19 @@ class SigmaTests(unittest.TestCase):
         self.assertEqual(request['symbols'], [symbol])
         self.assertEqual(request['stype_in'], 'raw_symbol')
         self.assertEqual(request['schema'], 'cbbo-1m')
+
+    def test_historical_fallback_request_uses_requested_window(self):
+        import pandas as pd
+        from unittest.mock import MagicMock
+        from scripts.expected_sigma import historical_quotes
+        client = MagicMock()
+        client.metadata.get_cost.return_value = 0
+        client.timeseries.get_range.return_value.to_df.return_value = pd.DataFrame()
+        with patch('scripts.expected_sigma.db.Historical', return_value=client):
+            historical_quotes('test', ['AAA'], at('2026-09-08T20:00:00+00:00'), 5,
+                              window_minutes=15)
+        request = client.timeseries.get_range.call_args.kwargs
+        self.assertEqual(request['start'], at('2026-09-08T19:45:00+00:00'))
 
     def test_post_close_record_is_not_replay_completion(self):
         from unittest.mock import MagicMock
@@ -272,6 +333,14 @@ class SharedSigmaTests(unittest.TestCase):
         self.assertEqual(len(merged['quotes']), 2)
         self.assertEqual(merged['spots'], {'AAA': 100, 'BBB': 200})
 
+    def test_closing_input_merge_preserves_fallback_coverage(self):
+        from scripts.expected_sigma import merge_closing_inputs
+        merged = merge_closing_inputs(
+            {'fallback_requested_tickers': ['AAA']},
+            {'fallback_requested_tickers': ['BBB']},
+        )
+        self.assertEqual(merged['fallback_requested_tickers'], ['AAA', 'BBB'])
+
     def test_wrong_session_publication_rejected(self):
         from scripts.shared_cache import SharedCacheError
         objects = self.configure_shared()
@@ -347,5 +416,5 @@ class SharedSigmaTests(unittest.TestCase):
              patch('scripts.expected_sigma.prepare_option_pairs', return_value=({}, {})), \
              patch('scripts.expected_sigma.estimate_option_iv', return_value=None) as estimate:
             self.sigma.refresh(source, when)
-        self.assertEqual([call.args[0]['ticker'] for call in estimate.call_args_list], ['BBB'])
+        self.assertEqual({call.args[0]['ticker'] for call in estimate.call_args_list}, {'BBB'})
         self.assertEqual(self.sigma.apply(source, when)['today']['rows'][0]['sigma_1d_pct'], 2)

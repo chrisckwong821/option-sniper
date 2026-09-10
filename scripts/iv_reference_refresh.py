@@ -1,9 +1,10 @@
 """Repair expansion baselines from validated shared closing inputs, without downloads."""
-from datetime import datetime, timedelta
+from datetime import datetime
 import math
 import pandas as pd
-from .expected_sigma import read_json, sigma_plan, validated_rows, YEAR_SECONDS
-from .nasdaq_universe_movers import prepare_option_pairs, estimate_option_iv
+from .expected_sigma import (FALLBACK_CLOSE_WINDOW_MINUTES, YEAR_SECONDS,
+                             latest_closing_estimates, read_json, sigma_plan,
+                             validated_rows)
 
 
 def closing_references(service, now=None):
@@ -19,13 +20,14 @@ def closing_references(service, now=None):
                   if t in valid and math.isfinite(float(p)) and float(p) > 0]
     close = datetime.fromisoformat(plan['iv_snapshot_time'])
     frame = pd.DataFrame(inputs['quotes'])
-    stamps = pd.to_datetime(frame['ts_recv'], utc=True)
-    frame = frame[(stamps >= close - timedelta(minutes=1)) & (stamps <= close)]
-    pairs, _ = prepare_option_pairs(frame, candidates, datetime.fromisoformat(plan['option_expiry']).date())
     years = (datetime.fromisoformat(plan['expiry_close']) - close).total_seconds() / YEAR_SECONDS
+    estimates, quote_times = latest_closing_estimates(
+        frame, candidates, datetime.fromisoformat(plan['option_expiry']).date(), close,
+        FALLBACK_CLOSE_WINDOW_MINUTES, years,
+    )
     references = {}
     for row in candidates:
-        estimate = estimate_option_iv(row, pairs.get(row['ticker'], []), years)
+        estimate = estimates.get(row['ticker'])
         if not estimate:
             continue
         references[row['ticker']] = {
@@ -34,6 +36,10 @@ def closing_references(service, now=None):
             'reference_forward': estimate['forward_price'],
             'reference_strikes': estimate['iv_input_strike_values'],
             'moneyness_targets': estimate['iv_input_log_moneyness'],
+            'iv_quote_time': quote_times.get(row['ticker']),
+            'iv_quote_age_minutes': (
+                close - datetime.fromisoformat(quote_times[row['ticker']])
+            ).total_seconds() / 60,
             'option_expiry': plan['option_expiry'],
             'requested_session': plan['iv_session'], 'reference_session': plan['iv_session'],
             'reference_status': 'yesterday', 'fallback_sessions': 0,
