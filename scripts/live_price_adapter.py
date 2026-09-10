@@ -678,7 +678,7 @@ class DatabentoOptionFeed:
         stop: asyncio.Event,
         subscription_chunk_size: int = 2_000,
         symbol_provider: Callable[[], list[str]] | None = None,
-        replan_interval_seconds: float = 300.0,
+        replan_interval_seconds: float = 60.0,
         definition_parents: list[str] | None = None,
         definition_callback: Callable[[Any], None] | None = None,
     ) -> None:
@@ -1159,7 +1159,7 @@ def create_app(
             "calculation_interval_seconds": iv_tracker.calculation_interval_seconds,
             "pending_calculations": len(iv_tracker.pending_calculations),
             "method": "moneyness-matched-black76-v1",
-            "subscription_refresh_seconds": 300,
+            "subscription_refresh_seconds": 60,
             "subscription_plan": option_runtime["feed"].last_plan if option_runtime["feed"] else {},
             "contract_catalog": {
                 "source": (
