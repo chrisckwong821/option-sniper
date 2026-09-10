@@ -109,7 +109,7 @@ def latest_closing_estimates(quotes, candidates, option_expiry, close, window_mi
     if quotes.empty or "ts_recv" not in quotes.columns:
         return {}, {}
     frame = quotes.copy()
-    frame["ts_recv"] = pd.to_datetime(frame["ts_recv"], utc=True)
+    frame["ts_recv"] = pd.to_datetime(frame["ts_recv"], utc=True, format="mixed")
     close_stamp = pd.Timestamp(close)
     frame = frame[
         (frame["ts_recv"] >= close_stamp - pd.Timedelta(minutes=window_minutes))

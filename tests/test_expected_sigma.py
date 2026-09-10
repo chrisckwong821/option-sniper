@@ -134,9 +134,9 @@ class SigmaTests(unittest.TestCase):
                  bid_px_00=1.0, ask_px_00=1.2),
         ]
         earlier_quotes = [
-            dict(ts_recv='2026-09-08T19:54:00+00:00', symbol=call,
+            dict(ts_recv='2026-09-08T19:54:00.000Z', symbol=call,
                  bid_px_00=2.0, ask_px_00=2.2),
-            dict(ts_recv='2026-09-08T19:54:00+00:00', symbol=put,
+            dict(ts_recv='2026-09-08T19:54:00.000Z', symbol=put,
                  bid_px_00=1.0, ask_px_00=1.2),
         ]
         with patch('scripts.expected_sigma.resolve_live_option_api_key', return_value='live'), \
