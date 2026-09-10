@@ -996,6 +996,20 @@ def create_app(
     state_bundle = with_yesterday_snapshot(
         state_bundle, getattr(args, "yesterday_state_cache", None),
     )
+    from scripts.expected_sigma import ExpectedSigma, sigma_plan
+    from scripts.iv_reference_refresh import align_serving_expiry, shared_references
+    expected_sigma = ExpectedSigma(
+        getattr(args, "state_cache", args.cache).parent,
+        max_option_cost=getattr(args, "max_option_cost", 5.0),
+        max_spot_cost=getattr(args, "max_spot_cost", 1.0),
+    )
+    if not args.mock:
+        active_plan = sigma_plan()
+        try:
+            _, active_references = shared_references(expected_sigma)
+        except Exception:
+            active_references = {}  # The background S3 loop retries safely.
+        state_bundle = align_serving_expiry(state_bundle, active_plan, active_references)
     snapshot = state_bundle["snapshot"]
     universe = state_bundle["today"]
     symbols = tracked_symbols(snapshot, universe)
@@ -1007,6 +1021,10 @@ def create_app(
         cycle_id=state_bundle.get("generated_at_utc"),
         calculation_interval_seconds=60,
     )
+    iv_tracker.pending_roots = {
+        row['ticker']: (row.get('iv_chain') or {}).get('occ_root')
+        for row in universe['rows']
+    }
     store = PriceStore(
         symbols=symbols,
         cache_path=args.cache,
@@ -1186,13 +1204,6 @@ def create_app(
         payload["history_repair"] = dict(history_repair_status)
         payload["stream"] = store.stream_metrics()
         return web.json_response(payload)
-
-    from scripts.expected_sigma import ExpectedSigma
-    expected_sigma = ExpectedSigma(
-        getattr(args, "state_cache", args.cache).parent,
-        max_option_cost=getattr(args, "max_option_cost", 5.0),
-        max_spot_cost=getattr(args, "max_spot_cost", 1.0),
-    )
 
     async def state_handler(request: web.Request) -> web.Response:
         payload = state_bundle if args.mock else expected_sigma.apply(state_bundle)

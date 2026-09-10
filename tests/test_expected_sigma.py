@@ -20,6 +20,12 @@ def bundle():
             for view in ('today', 'snapshot')}
 
 class SigmaTests(unittest.TestCase):
+    def test_thursday_friday_roll_to_next_weekly(self):
+        for session in ('2026-09-10', '2026-09-11'):
+            plan = sigma_plan(at(session + 'T10:00:00-04:00'))
+            self.assertEqual(plan['option_expiry'], '2026-09-18')
+        self.assertEqual(sigma_plan(at('2026-09-09T10:00:00-04:00'))['option_expiry'], '2026-09-11')
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.sigma = ExpectedSigma(Path(self.tmp.name))
@@ -345,7 +351,7 @@ class SharedSigmaTests(unittest.TestCase):
         from scripts.shared_cache import SharedCacheError
         objects = self.configure_shared()
         when = at('2026-09-09T04:12:00-04:00')
-        objects['expected-sigma/2026-09-09.json'] = {'plan': sigma_plan(at('2026-09-08T04:00:00-04:00')), 'inputs': {}}
+        objects['expected-sigma-min2dte-v2/2026-09-09.json'] = {'plan': sigma_plan(at('2026-09-08T04:00:00-04:00')), 'inputs': {}}
         with self.assertRaises(SharedCacheError):
             self.sigma.refresh(bundle(), when)
 
@@ -353,7 +359,7 @@ class SharedSigmaTests(unittest.TestCase):
         objects = self.configure_shared()
         when = at('2026-09-09T04:12:00-04:00')
         previous = sigma_plan(at('2026-09-08T04:12:00-04:00'))
-        objects['expected-sigma/2026-09-08.json'] = {'plan': previous,
+        objects['expected-sigma-min2dte-v2/2026-09-08.json'] = {'plan': previous,
             'rows': {'AAA': {'sigma_1d_pct': 3, 'annualized_implied_vol_pct': 3 / math.sqrt(previous['year_fraction'])}},
             'inputs': {'spots': {'AAA': 100}}}
         with patch('scripts.expected_sigma.resolve_historical_api_keys', return_value=(None, None)):

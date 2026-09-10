@@ -118,7 +118,7 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
             rows = {row['ticker']: {'sigma_1d_pct': 2,
                                    'annualized_implied_vol_pct': 2 / math.sqrt(plan['year_fraction'])}
                     for row in pending['today']['rows']}
-            atomic_write_json(Path(self.tempdir.name) / 'expected-sigma' / '2026-09-09.json',
+            atomic_write_json(Path(self.tempdir.name) / 'expected-sigma-min2dte-v2' / '2026-09-09.json',
                               {'plan': plan, 'rows': rows})
             after = await self.client.get('/api/state', headers={'If-None-Match': before.headers['ETag']})
             self.assertEqual(after.status, 200)

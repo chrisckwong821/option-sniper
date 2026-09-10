@@ -23,7 +23,7 @@ from .databento_config import resolve_live_option_api_key, resolve_historical_ap
 from .nasdaq_universe_movers import estimate_option_iv, prepare_option_pairs, fetch_spot
 
 EASTERN = ZoneInfo("America/New_York")
-VERSION = "previous-close-premarket-v1"
+VERSION = "previous-close-premarket-min2dte-v2"
 YEAR_SECONDS = 365 * 86400
 PRIMARY_CLOSE_WINDOW_MINUTES = 1
 FALLBACK_CLOSE_WINDOW_MINUTES = 15
@@ -37,8 +37,8 @@ def sigma_plan(now=None):
     previous = calendar.previous_session(active)
     close = calendar.session_close(previous).to_pydatetime()
     end = calendar.session_close(active).to_pydatetime()
-    friday = active.date() + timedelta(days=(4 - active.weekday()) % 7)
-    expiry = calendar.sessions_in_range(active, friday)[-1]
+    from .iv_expansion_history import option_expiry_for_observation
+    expiry = pd.Timestamp(option_expiry_for_observation(active.date(), calendar=calendar))
     return {
         "version": VERSION,
         "effective_session": str(active.date()),
@@ -223,7 +223,7 @@ def historical_quotes(key, tickers, close, max_cost, *, expiry=None, contracts=N
 
 class ExpectedSigma:
     def __init__(self, root: Path, *, max_option_cost=5.0, max_spot_cost=1.0):
-        self.root = root / "expected-sigma"
+        self.root = root / "expected-sigma-min2dte-v2"
         self.max_option_cost = max_option_cost
         self.max_spot_cost = max_spot_cost
         self.error = None
@@ -236,7 +236,7 @@ class ExpectedSigma:
         background loop retry without accidentally charging for a replacement.
         """
         remote = self.root / "remote.json"
-        if not self.shared.get("expected-sigma/" + plan["effective_session"] + ".json", remote):
+        if not self.shared.get("expected-sigma-min2dte-v2/" + plan["effective_session"] + ".json", remote):
             return
         saved = read_json(remote)
         if saved.get("plan") != plan or not isinstance(saved.get("inputs"), dict):
@@ -263,7 +263,7 @@ class ExpectedSigma:
                 raise SharedCacheError("Invalid shared expected-sigma provenance")
             return {**publication, "rows": {**validated_rows(previous, plan), **publication["rows"]},
                     "inputs": merge_closing_inputs(previous.get("inputs", {}), publication["inputs"])}
-        self.shared.update_json("expected-sigma/" + plan["effective_session"] + ".json", merge)
+        self.shared.update_json("expected-sigma-min2dte-v2/" + plan["effective_session"] + ".json", merge)
 
     def refresh(self, bundle, now=None, *, effective_at=None, regular_prices=None):
         """Prepare the active session. Called off the server event loop."""

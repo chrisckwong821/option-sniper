@@ -7,6 +7,35 @@ from .expected_sigma import (FALLBACK_CLOSE_WINDOW_MINUTES, YEAR_SECONDS,
                              validated_rows)
 
 
+def align_serving_expiry(bundle, plan, references):
+    """Adapt cached screening rows to the active expiry without fitting IV."""
+    import copy
+    result = copy.deepcopy(bundle)
+    result['refresh_plan']['option_expiry'] = plan['option_expiry']
+    result['refresh_plan']['option_expiry_close'] = plan['expiry_close']
+    for view in ('today', 'snapshot'):
+        result[view]['option_expiry'] = plan['option_expiry']
+        for row in result[view]['rows']:
+            row['option_expiry'] = plan['option_expiry']
+            ref = references.get(row['ticker'])
+            old = row.get('iv_expansion_reference') or {}
+            if ref:
+                row['iv_expansion_reference'] = {
+                    'method': 'moneyness-matched-black76-v1',
+                    'annualized_implied_vol_pct': ref['reference_iv_pct'],
+                    'forward_price': ref['reference_forward'],
+                    'strikes': ref['reference_strikes'],
+                    'log_moneyness': ref['moneyness_targets'],
+                    **ref,
+                }
+                row['iv_chain'] = {**(row.get('iv_chain') or {}),
+                                   'strikes': ref['reference_strikes']}
+            elif old.get('option_expiry') != plan['option_expiry']:
+                row['iv_expansion_reference'] = {}
+                row['iv_chain'] = {**(row.get('iv_chain') or {}), 'strikes': []}
+    return result
+
+
 def closing_references(service, now=None):
     plan = sigma_plan(now)
     saved = read_json(service.root / (plan['effective_session'] + '.json'))
@@ -53,7 +82,7 @@ def shared_references(service, now=None):
     plan = sigma_plan(now)
     with tempfile.TemporaryDirectory() as folder:
         path = __import__('pathlib').Path(folder) / 'references.json'
-        if not service.shared.get('bucket-sigma/' + plan['effective_session'] + '.json', path):
+        if not service.shared.get('bucket-sigma-min2dte-v2/' + plan['effective_session'] + '.json', path):
             return plan, {}
         payload = read_json(path)
     if payload.get('plan') != plan:
@@ -82,9 +111,16 @@ def activate_references(store, plan, references):
     changed = 0
     for ticker, ref in references.items():
         old = tracker.references.get(ticker)
-        if not old or (old.get('reference_session') == plan['iv_session']
+        if old and (old.get('reference_session') == plan['iv_session']
                        and old.get('reference_status') == 'yesterday'):
             continue
+        if not old:
+            root = getattr(tracker, 'pending_roots', {}).get(ticker)
+            if not root:
+                continue
+            old = {'occ_root': root}
+            from .nasdaq_universe_movers import normalize_symbol
+            tracker.ticker_by_root[normalize_symbol(root)] = ticker
         tracker.references[ticker] = {**old, **ref, 'baseline_revision': old.get('baseline_revision', 1) + 1}
         tracker.results.pop(ticker, None)
         tracker.next_calculation.pop(ticker, None)

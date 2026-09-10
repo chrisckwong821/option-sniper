@@ -38,7 +38,7 @@ def main():
     publication = {'plan': reference_plan, 'references': references}
     ref_path = root / 'bucket-references.json'
     atomic_json(ref_path, publication)
-    shared.put('bucket-sigma/' + plan['effective_session'] + '.json', ref_path)
+    shared.put('bucket-sigma-min2dte-v2/' + plan['effective_session'] + '.json', ref_path)
     ensure_bucket_statistics(root, state, allow_download=True)
     print(json.dumps({'iv_session': plan['iv_session'], 'references': len(references), 'status': 'published'}), flush=True)
 
