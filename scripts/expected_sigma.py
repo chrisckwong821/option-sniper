@@ -244,11 +244,12 @@ class ExpectedSigma:
         path = self.root / (plan["effective_session"] + ".json")
         local = read_json(path)
         rows = {**validated_rows(local, plan), **validated_rows(saved, plan)}
-        atomic_write_json(path, {"plan": plan, "rows": rows, "source": saved.get("source")})
         inputs_path = self.root / ("close-" + plan["iv_session"] + ".json")
         inputs = read_json(inputs_path)
         incoming = saved["inputs"]
         atomic_write_json(inputs_path, merge_closing_inputs(inputs, incoming))
+        # Publish readiness last: readers must see closing anchors before fresh sigma.
+        atomic_write_json(path, {"plan": plan, "rows": rows, "source": saved.get("source")})
 
     def publish(self, plan):
         saved = read_json(self.root / (plan["effective_session"] + ".json"))

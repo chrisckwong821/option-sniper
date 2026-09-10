@@ -424,3 +424,26 @@ class SharedSigmaTests(unittest.TestCase):
             self.sigma.refresh(source, when)
         self.assertEqual({call.args[0]['ticker'] for call in estimate.call_args_list}, {'BBB'})
         self.assertEqual(self.sigma.apply(source, when)['today']['rows'][0]['sigma_1d_pct'], 2)
+
+    def test_failed_anchor_restore_does_not_publish_fresh_sigma(self):
+        when = at('2026-09-10T10:00:00-04:00')
+        plan = sigma_plan(when)
+        publication = {'plan': plan, 'rows': {'AAA': {'sigma_1d_pct': 2,
+            'annualized_implied_vol_pct': 2 / math.sqrt(plan['year_fraction'])}},
+            'inputs': {'spots': {'AAA': 106}}}
+        def download(key, path):
+            atomic_write_json(path, publication)
+            return True
+        def failing_write(path, value):
+            if path.name.startswith('close-'):
+                raise OSError('Simulated interrupted anchor restore')
+            atomic_write_json(path, value)
+        with patch.object(self.sigma.shared, 'get', side_effect=download), patch(
+                'scripts.expected_sigma.atomic_write_json', side_effect=failing_write):
+            with self.assertRaises(OSError): self.sigma.sync_shared(plan)
+        self.assertEqual(self.sigma.apply(bundle(), when)['expected_sigma']['status'], 'awaiting_previous_close')
+        with patch.object(self.sigma.shared, 'get', side_effect=download):
+            self.sigma.sync_shared(plan)
+        result = self.sigma.apply(bundle(), when)
+        self.assertEqual(result['expected_sigma']['status'], 'fresh')
+        self.assertEqual(result['today']['rows'][0]['return_anchor_price'], 106)
