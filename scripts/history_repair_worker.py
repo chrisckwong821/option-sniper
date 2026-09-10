@@ -3,12 +3,13 @@ import argparse
 import json
 import os
 from pathlib import Path
-from .computed_cache import restore
+from .computed_cache import restore as restore_computed
 from .dashboard_state import screening_policy_fingerprint
 from .expected_sigma import ExpectedSigma, sigma_plan
 from .iv_reference_refresh import closing_references
 from .shared_cache import SharedCache, atomic_json
 from .startup_history import ensure_bucket_statistics
+from .universe_input import restore as restore_universe
 
 
 def main():
@@ -23,11 +24,12 @@ def main():
     if not shared.enabled:
         raise RuntimeError('Dedicated worker requires S3')
     plan = sigma_plan()
-    state_path = root / 'dashboard-state.json'
-    restore(root, plan['iv_session'], screening_policy_fingerprint())
-    state = json.loads(state_path.read_text())
-    if state['today']['anchor_date'] != plan['iv_session']:
-        raise RuntimeError('Shared universe does not cover required completed session')
+    fingerprint = screening_policy_fingerprint()
+    # Calibration/history may come from the prior computed release. The current
+    # universe is a separate producer input and must match this exact session.
+    restore_computed(root, plan['iv_session'], fingerprint,
+                     include_state=False, history_only=True)
+    state = restore_universe(root, plan['iv_session'], fingerprint)
     service = ExpectedSigma(root)
     service.refresh(state)
     reference_plan, references = closing_references(service)

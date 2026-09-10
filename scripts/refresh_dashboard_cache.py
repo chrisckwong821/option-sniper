@@ -15,6 +15,7 @@ from .dashboard_state import (
     RefreshSettings,
     build_refresh_plan,
 )
+from .universe_input import publish as publish_universe
 
 
 def is_reopening_refresh_due(plan, now=None):
@@ -53,6 +54,12 @@ def main() -> None:
     cache = state["cache"]
     if cache["source"] == "cache-fallback":
         raise RuntimeError(cache["last_refresh_error"] or "Dashboard refresh failed")
+    # Only the canonical completed-session cache feeds the dedicated worker.
+    # Yesterday-only snapshots have a different purpose and key lifecycle.
+    if args.state_cache.name == DEFAULT_STATE_CACHE.name:
+        universe_key = publish_universe(args.state_cache.parent, state)
+    else:
+        universe_key = None
     print(json.dumps({
         "cache_status": cache["status"],
         "cache_source": cache["source"],
@@ -60,6 +67,7 @@ def main() -> None:
         "option_expiry": plan.option_expiry,
         "valid_iv_coverage": state["today"]["valid_iv_coverage"],
         "screening_policy_fingerprint": state["screening_policy_fingerprint"],
+        "universe_input": universe_key,
     }, indent=2))
 
 
