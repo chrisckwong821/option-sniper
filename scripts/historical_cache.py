@@ -268,6 +268,13 @@ class HistoricalCache:
                 frames.append(frame.loc[mask])
             for missing in self._requests(request, gaps):
                 cost = float(self.client.metadata.get_cost(**missing))
+                print(json.dumps({'history_gap': {
+                    'dataset': missing['dataset'], 'schema': missing['schema'],
+                    'start': str(missing['start']), 'end': str(missing['end']),
+                    'symbol_count': len(missing['symbols']),
+                    'symbols': missing['symbols'] if len(missing['symbols']) <= 20 else None,
+                    'estimated_cost_usd': cost,
+                }}), flush=True)
                 cap = min(5.0, float(os.environ.get('SIGMA_RECONSTRUCTION_MAX_COST') or '5'))
                 if not 0 <= cost <= cap:
                     raise RuntimeError(f'Databento request exceeds ${cap:.4f} reconstruction budget')
@@ -287,6 +294,10 @@ class HistoricalCache:
                     store = db.DBNStore.from_file(temporary)
                     frames.append(_read_frame(store, request.get('schema')))
                     os.replace(temporary, target)
+                    print(json.dumps({'history_download_complete': {
+                        'schema': missing['schema'], 'bytes': target.stat().st_size,
+                        'symbol_count': len(missing['symbols']),
+                    }}), flush=True)
                 finally:
                     temporary.unlink(missing_ok=True)
                 entry = {'path': target.relative_to(self.root).as_posix(), 'request': normalized(missing),
