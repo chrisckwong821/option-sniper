@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -15,10 +16,11 @@ from zoneinfo import ZoneInfo
 
 import databento as db
 import exchange_calendars as xcals
+import ijson
 import pandas as pd
 
 from .dashboard_state import atomic_write_json
-from .shared_cache import SharedCache, SharedCacheError
+from .shared_cache import SharedCache, SharedCacheError, digest
 from .databento_config import resolve_live_option_api_key, resolve_historical_api_keys
 from .nasdaq_universe_movers import estimate_option_iv, prepare_option_pairs, fetch_spot
 
@@ -60,11 +62,73 @@ def next_activation(now):
     return datetime.combine(session.date(), datetime.min.time(), EASTERN).replace(hour=4)
 
 
-def read_json(path):
+class _FiniteJSONReader:
+    """Normalize Python JSON's non-finite literals in bounded binary chunks.
+
+    Old worker caches can contain NaN bids/asks. Strict streaming parsers reject
+    those even in discarded quotes. Treat invalid numeric values as null while
+    leaving quoted strings (including escaped quotes) unchanged.
+    """
+    tokens = re.compile(rb'"|\\[\s\S]|(?<![\w])(?:-?Infinity|NaN)(?![\w])')
+
+    def __init__(self, stream):
+        self.chunks = self._chunks(stream)
+        self.pending = b""
+
+    def _chunks(self, stream):
+        carry, in_string = b"", False
+        while True:
+            block = stream.read(65536)
+            data = carry + block
+            # Retain enough bytes to resolve literals/escapes across boundaries.
+            end = max(0, len(data) - 10) if block else len(data)
+            pieces, start = [], 0
+            for match in self.tokens.finditer(data):
+                if match.start() >= end:
+                    break
+                if match.end() > end:
+                    end = match.start()
+                    break
+                token = match.group()
+                if token == b'"':
+                    in_string = not in_string
+                elif not in_string and token[:1] != b'\\':
+                    pieces.extend((data[start:match.start()], b"null"))
+                    start = match.end()
+            pieces.append(data[start:end])
+            if end:
+                yield b"".join(pieces)
+            carry = data[end:]
+            if not block:
+                return
+
+    def read(self, size=65536):
+        if size == 0:
+            return b""
+        if not self.pending:
+            self.pending = next(self.chunks, b"")
+        result, self.pending = self.pending[:size], self.pending[size:]
+        return result
+
+
+def read_json(path, *, exclude_quotes=False):
     try:
+        if exclude_quotes:
+            # Serving processes need the worker's finished rows and spot anchors,
+            # never its hundreds of thousands of raw reconstruction quotes.
+            from ijson.common import ObjectBuilder
+            builder = ObjectBuilder()
+            with path.open("rb") as stream:
+                for prefix, event, value in ijson.parse(_FiniteJSONReader(stream), use_float=True):
+                    if ((prefix in ("", "inputs") and event == "map_key" and value == "quotes")
+                            or prefix in ("quotes", "inputs.quotes")
+                            or prefix.startswith(("quotes.", "inputs.quotes."))):
+                        continue
+                    builder.event(event, value)
+            return builder.value if isinstance(builder.value, dict) else {}
         value = json.loads(path.read_text())
         return value if isinstance(value, dict) else {}
-    except (OSError, ValueError):
+    except (OSError, ValueError, ijson.JSONError):
         return {}
 
 
@@ -222,10 +286,14 @@ def historical_quotes(key, tickers, close, max_cost, *, expiry=None, contracts=N
 
 
 class ExpectedSigma:
-    def __init__(self, root: Path, *, max_option_cost=5.0, max_spot_cost=1.0):
+    def __init__(self, root: Path, *, max_option_cost=5.0, max_spot_cost=1.0,
+                 serving_only=False):
         self.root = root / "expected-sigma-min2dte-v2"
         self.max_option_cost = max_option_cost
         self.max_spot_cost = max_spot_cost
+        self.serving_only = serving_only
+        self._shared_signatures = {}
+        self._closing_inputs = None
         self.error = None
         self.shared = SharedCache(root)
 
@@ -238,20 +306,31 @@ class ExpectedSigma:
         remote = self.root / "remote.json"
         if not self.shared.get("expected-sigma-min2dte-v2/" + plan["effective_session"] + ".json", remote):
             return
-        saved = read_json(remote)
+        path = self.root / (plan["effective_session"] + ".json")
+        inputs_path = self.root / ("close-" + plan["iv_session"] + ".json")
+        def local_signature():
+            return tuple((p.stat().st_mtime_ns, p.stat().st_size) if p.exists() else None
+                         for p in (path, inputs_path))
+        remote_digest = digest(remote) if self.serving_only else None
+        if (self.serving_only and self._shared_signatures.get(plan["effective_session"])
+                == (remote_digest, local_signature())):
+            return
+        saved = read_json(remote, exclude_quotes=self.serving_only)
         if saved.get("plan") != plan or not isinstance(saved.get("inputs"), dict):
             raise SharedCacheError("Invalid shared expected-sigma provenance")
-        path = self.root / (plan["effective_session"] + ".json")
         local = read_json(path)
         rows = {**validated_rows(local, plan), **validated_rows(saved, plan)}
-        inputs_path = self.root / ("close-" + plan["iv_session"] + ".json")
-        inputs = read_json(inputs_path)
+        inputs = read_json(inputs_path, exclude_quotes=self.serving_only)
         incoming = saved["inputs"]
         atomic_write_json(inputs_path, merge_closing_inputs(inputs, incoming))
         # Publish readiness last: readers must see closing anchors before fresh sigma.
         atomic_write_json(path, {"plan": plan, "rows": rows, "source": saved.get("source")})
+        if self.serving_only:
+            self._shared_signatures[plan["effective_session"]] = (remote_digest, local_signature())
 
     def publish(self, plan):
+        if self.serving_only:
+            raise RuntimeError("Serving instances cannot publish expected sigma")
         saved = read_json(self.root / (plan["effective_session"] + ".json"))
         if not validated_rows(saved, plan):
             return
@@ -268,6 +347,8 @@ class ExpectedSigma:
 
     def refresh(self, bundle, now=None, *, effective_at=None, regular_prices=None):
         """Prepare the active session. Called off the server event loop."""
+        if self.serving_only:
+            raise RuntimeError("Serving instances cannot reconstruct expected sigma")
         now = now or datetime.now(UTC)
         plan = sigma_plan(effective_at or now)
         tickers = sorted({r["ticker"] for view in ("today", "snapshot") for r in bundle[view]["rows"]})
@@ -426,7 +507,14 @@ class ExpectedSigma:
         saved = read_json(self.root / (plan["effective_session"] + ".json"))
         current_rows = validated_rows(saved, plan)
         result = copy.deepcopy(bundle)
-        closing_inputs = read_json(self.root / ("close-" + plan["iv_session"] + ".json"))
+        inputs_path = self.root / ("close-" + plan["iv_session"] + ".json")
+        stamp = (str(inputs_path), inputs_path.stat().st_mtime_ns, inputs_path.stat().st_size) if inputs_path.exists() else None
+        if self.serving_only and self._closing_inputs and self._closing_inputs[0] == stamp:
+            closing_inputs = self._closing_inputs[1]
+        else:
+            closing_inputs = read_json(inputs_path, exclude_quotes=self.serving_only)
+            if self.serving_only:
+                self._closing_inputs = (stamp, closing_inputs)
         closing_spots = closing_inputs.get("spots", {})
         # A pending rollover keeps the last validated shared denominator. Old
         # list caches are a last-resort migration fallback, explicitly stale.

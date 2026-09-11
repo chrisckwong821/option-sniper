@@ -1000,6 +1000,7 @@ def create_app(
     from scripts.iv_reference_refresh import align_serving_expiry, shared_references
     expected_sigma = ExpectedSigma(
         getattr(args, "state_cache", args.cache).parent,
+        serving_only=True,
         max_option_cost=getattr(args, "max_option_cost", 5.0),
         max_spot_cost=getattr(args, "max_spot_cost", 1.0),
     )
@@ -1205,8 +1206,14 @@ def create_app(
         payload["stream"] = store.stream_metrics()
         return web.json_response(payload)
 
+    state_lock = asyncio.Lock()
+
     async def state_handler(request: web.Request) -> web.Response:
-        payload = state_bundle if args.mock else expected_sigma.apply(state_bundle)
+        # A legacy closing cache can take seconds to stream on first access.
+        # Keep health checks and live quotes responsive, and serialize readers
+        # so reconnecting browsers cannot multiply that startup work.
+        async with state_lock:
+            payload = state_bundle if args.mock else await asyncio.to_thread(expected_sigma.apply, state_bundle)
         current_etag = '"' + hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest() + '"'
         headers = {"Cache-Control": "no-store", "ETag": current_etag}
         if request.headers.get("If-None-Match") == current_etag:

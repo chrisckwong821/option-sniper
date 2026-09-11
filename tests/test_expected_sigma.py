@@ -320,6 +320,71 @@ class SharedSigmaTests(unittest.TestCase):
             self.assertEqual(row['iv_snapshot_time'], '2026-09-08T20:00:00+00:00')
         self.assertNotIn('z_score', str(objects))
 
+    def test_serving_replica_keeps_worker_values_without_raw_quotes(self):
+        import json
+        self.configure_shared()
+        when = at('2026-09-11T04:12:00-04:00')
+        plan = sigma_plan(when)
+        self.save(when.isoformat())
+        inputs = {'spots': {'AAA': 106.125}, 'source': 'historical',
+                  'quotes': [{'symbol': 'AAA   260918C00100000', 'ts_recv': '2026-09-10T20:00:00Z',
+                              'bid_px_00': float('nan'), 'ask_px_00': float('inf')}], 'requested_tickers': ['AAA']}
+        atomic_write_json(self.sigma.root / 'close-2026-09-10.json', inputs)
+        self.sigma.publish(plan)
+        with tempfile.TemporaryDirectory() as root:
+            replica = ExpectedSigma(Path(root), serving_only=True)
+            replica.shared = self.sigma.shared
+            # Exercise migration of an existing large input cache as well as S3.
+            atomic_write_json(replica.root / 'close-2026-09-10.json', inputs)
+            self.assertEqual(replica.apply(bundle(), when)['today']['rows'][0]['return_anchor_price'], 106.125)
+            from scripts.expected_sigma import read_json
+            with patch('scripts.expected_sigma.read_json', wraps=read_json) as reads:
+                replica.apply(bundle(), when)
+                self.assertFalse(any(call.args[0].name.startswith('close-') for call in reads.call_args_list))
+            replica.sync_shared(plan)
+            self.assertEqual(replica.apply(bundle(), when), self.sigma.apply(bundle(), when))
+            with patch('scripts.expected_sigma.read_json', side_effect=AssertionError('Unchanged cache must not be decoded again')):
+                replica.sync_shared(plan)
+            # A repaired/new S3 publication still replaces closing anchors immediately.
+            inputs['spots']['AAA'] = 107.25
+            atomic_write_json(self.sigma.root / 'close-2026-09-10.json', inputs)
+            self.sigma.publish(plan)
+            replica.sync_shared(plan)
+            self.assertEqual(replica.apply(bundle(), when)['today']['rows'][0]['return_anchor_price'], 107.25)
+            retained = json.loads((replica.root / 'close-2026-09-10.json').read_text())
+            self.assertEqual(retained['quotes'], [])
+            self.assertEqual(retained['spots'], inputs['spots'])
+            self.assertEqual(len(json.loads((self.sigma.root / 'close-2026-09-10.json').read_text())['quotes']), 1)
+            with self.assertRaisesRegex(RuntimeError, 'cannot reconstruct'):
+                replica.refresh(bundle(), when)
+            with self.assertRaisesRegex(RuntimeError, 'cannot publish'):
+                replica.publish(plan)
+
+    def test_streaming_reader_preserves_strings_and_split_literals(self):
+        import io, json
+        from scripts.expected_sigma import _FiniteJSONReader
+        for padding in range(65500, 65550):
+            payload = {'text': 'x' * padding + 'NaN\\"Infinity',
+                       'invalid': [float('nan'), float('inf'), -float('inf')], 'spot': 106.125}
+            reader = _FiniteJSONReader(io.BytesIO(json.dumps(payload).encode()))
+            normalized = b''.join(iter(lambda: reader.read(257), b''))
+            decoded = json.loads(normalized)
+            self.assertEqual(decoded, {**payload, 'invalid': [None, None, None]})
+
+    def test_truncated_shared_publication_does_not_replace_serving_values(self):
+        self.sigma.serving_only = True
+        when = at('2026-09-11T04:12:00-04:00')
+        plan = sigma_plan(when)
+        self.save(when.isoformat())
+        before = self.sigma.apply(bundle(), when)
+        def download(key, path):
+            path.write_text('{"plan": {}, "inputs": {"quotes": [')
+            return True
+        with patch.object(self.sigma.shared, 'get', side_effect=download):
+            with self.assertRaisesRegex(Exception, 'provenance'):
+                self.sigma.sync_shared(plan)
+        self.assertEqual(self.sigma.apply(bundle(), when), before)
+
     def test_s3_error_does_not_trigger_paid_fallback(self):
         from scripts.shared_cache import SharedCacheError
         self.configure_shared()

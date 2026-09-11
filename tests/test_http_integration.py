@@ -1,6 +1,8 @@
 import argparse
+import asyncio
 import math
 import tempfile
+import threading
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
@@ -128,6 +130,30 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(all(r['sigma_1d_pct'] == 2 for r in ready[view]['rows']))
             unchanged = await self.client.get('/api/state', headers={'If-None-Match': after.headers['ETag']})
             self.assertEqual(unchanged.status, 304)
+
+    async def test_slow_sigma_read_does_not_block_health_or_duplicate_readers(self):
+        self.args.mock = False
+        entered, release = threading.Event(), threading.Event()
+        calls = []
+        def slow_apply(bundle):
+            calls.append(True)
+            entered.set()
+            release.wait(3)
+            return bundle
+        with patch('scripts.expected_sigma.ExpectedSigma.apply', side_effect=slow_apply):
+            first = asyncio.ensure_future(self.client.get('/api/state'))
+            second = None
+            try:
+                self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+                second = asyncio.ensure_future(self.client.get('/api/state'))
+                health = await asyncio.wait_for(self.client.get('/api/health'), 1)
+                self.assertEqual(health.status, 200)
+                self.assertEqual(len(calls), 1)
+            finally:
+                release.set()
+                await first
+                if second is not None:
+                    await second
 
     async def test_dirty_symbol_delta_is_shared_across_clients(self):
         args = argparse.Namespace(**vars(self.args))

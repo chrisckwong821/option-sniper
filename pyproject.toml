@@ -13,6 +13,7 @@ dependencies = [
   "boto3[crt]>=1.42,<2",
   "databento==0.85.0",
   "exchange-calendars>=4.11,<5",
+  "ijson>=3.4,<4",
   "numpy>=2,<3",
   "pandas>=2.2,<4",
 ]
