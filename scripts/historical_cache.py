@@ -44,6 +44,27 @@ def _read_frame(store, schema):
     return pd.concat(reduced) if reduced else pd.DataFrame()
 
 
+def _read_interval(store, schema, start, end, symbols=None):
+    """Filter cached archives in bounded chunks before retaining their rows."""
+    if schema == 'definition':
+        chunks = [_read_frame(store, schema)]
+    else:
+        chunks = store.to_df(count=10000)
+        if isinstance(chunks, pd.DataFrame):
+            chunks = [chunks]
+    selected = []
+    for frame in chunks:
+        stamp = pd.to_datetime(frame.index, utc=True)
+        mask = (stamp >= pd.Timestamp(start, tz='UTC')) & (stamp < pd.Timestamp(end, tz='UTC'))
+        if symbols is not None:
+            if 'symbol' not in frame.columns:
+                raise SharedCacheError('Cannot safely filter historical symbols')
+            mask &= frame['symbol'].isin(symbols)
+        if mask.any():
+            selected.append(frame.loc[mask].copy())
+    return pd.concat(selected) if selected else pd.DataFrame()
+
+
 class FrameStore:
     def __init__(self, frame):
         self.frame = frame
@@ -245,7 +266,7 @@ class HistoricalCache:
             path, parts, gaps = self.resolve(request)
             if path:
                 return db.DBNStore.from_file(path)
-            frames, loaded = [], {}
+            frames = []
             grouped = {}
             for entry, symbol, a, b in parts:
                 key = (entry['path'], a, b)
@@ -253,19 +274,13 @@ class HistoricalCache:
                     grouped[key] = (entry, [])
                 grouped[key][1].append(symbol)
             for (name, a, b), (entry, symbols) in grouped.items():
-                if name not in loaded:
-                    source = self.root / name
-                    if entry.get('sha256') and digest(source) != entry['sha256']:
-                        raise SharedCacheError('Local history checksum mismatch: ' + name)
-                    loaded[name] = _read_frame(db.DBNStore.from_file(source), request.get('schema'))
-                frame = loaded[name]
-                stamp = pd.to_datetime(frame.index, utc=True)
-                mask = (stamp >= pd.Timestamp(a, tz='UTC')) & (stamp < pd.Timestamp(b, tz='UTC'))
-                if request.get('stype_in', 'raw_symbol') == 'raw_symbol' and 'ALL_SYMBOLS' not in symbols:
-                    if 'symbol' not in frame.columns:
-                        raise SharedCacheError('Cannot safely filter historical symbols: ' + name)
-                    mask &= frame['symbol'].isin(symbols)
-                frames.append(frame.loc[mask])
+                source = self.root / name
+                if entry.get('sha256') and digest(source) != entry['sha256']:
+                    raise SharedCacheError('Local history checksum mismatch: ' + name)
+                wanted = symbols if request.get('stype_in', 'raw_symbol') == 'raw_symbol' and 'ALL_SYMBOLS' not in symbols else None
+                frame = _read_interval(db.DBNStore.from_file(source), request.get('schema'), a, b, wanted)
+                if not frame.empty:
+                    frames.append(frame)
             for missing in self._requests(request, gaps):
                 cost = float(self.client.metadata.get_cost(**missing))
                 print(json.dumps({'history_gap': {

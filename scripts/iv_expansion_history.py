@@ -1464,23 +1464,18 @@ def process_observation_session(
     )
     day_start = datetime.combine(observation_session, time(9, 30), EASTERN)
     day_end = datetime.combine(observation_session, time(16), EASTERN)
-    option_frame = _option_frames(
-        option_client,
-        ledger,
-        symbols,
-        day_start,
-        day_end,
-        option_symbol_chunk_size,
-        "observation_options",
-        download_workers,
-    )
-
     observations = 0
     for mark in bucket_marks(observation_session):
+        # Preserve the exact window formerly sliced from the full regular-day
+        # frame, while retaining only one bucket's quotes in memory.
+        window_start = max(day_start, mark.mark - timedelta(minutes=quote_lookback_minutes))
+        window_end = min(day_end, mark.end)
+        option_frame = _option_frames(
+            option_client, ledger, symbols, window_start, window_end,
+            option_symbol_chunk_size, "observation_options", download_workers,
+        )
         quote_window = frame_window(
-            option_frame,
-            mark.mark - timedelta(minutes=quote_lookback_minutes),
-            mark.end,
+            option_frame, window_start, window_end,
         )
         pairs_by_ticker = prepare_snapshot_pairs(
             quote_window,
@@ -1531,6 +1526,11 @@ def process_observation_session(
                 "moneyness_match_max_error": estimate.get("iv_moneyness_match_max_error"),
             })
             observations += 1
+        del option_frame, quote_window, pairs_by_ticker
+        print(f"observation={observation_session} bucket={mark.label} "
+              f"baselines={len(baselines)} observations={observations}", flush=True)
+    # Commit the complete session only: interrupted buckets must not be mistaken
+    # for a completed session by the incremental resume check.
     connection.commit()
     return {
         "target_tickers": len(tickers),

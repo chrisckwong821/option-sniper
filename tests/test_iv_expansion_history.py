@@ -40,6 +40,47 @@ from scripts.iv_expansion_history import (
 
 
 class IvExpansionHistoryTests(unittest.TestCase):
+    def test_bucket_batches_match_full_day_iv_calculation(self):
+        from scripts.iv_expansion_history import Baseline, process_observation_session, frame_window
+        session = date(2026, 9, 10)
+        marks = bucket_marks(session)
+        call, put = 'AAA   260918C00100000', 'AAA   260918P00100000'
+        baseline = Baseline('AAA', date(2026,9,9), date(2026,9,9), 0,
+            date(2026,9,18), 'target_weekly', 100,
+            {'annualized_implied_vol_pct':30, 'iv_input_log_moneyness':[0.0],
+             'forward_price':100, 'iv_reliability':'high'},
+            [{'strike':100,'call':call,'put':put}])
+        rows = [{'ticker':'AAA', 'iv_chain':{'occ_root':'AAA','strikes':[100]}}]
+        stocks = pd.DataFrame([{'ts_event':m.mark,'symbol':'AAA','close':100} for m in marks])
+        quotes = pd.DataFrame([
+            {'ts_recv':m.mark, 'symbol':symbol, 'bid_px_00':2+i/10, 'ask_px_00':2.2+i/10}
+            for i,m in enumerate(marks) for symbol in (call,put)])
+        # The old full-day request excluded 16:00; the last bucket must still do so.
+        close = marks[-1].mark + pd.Timedelta(minutes=1)
+        poison = pd.DataFrame([{'ts_recv':close,'symbol':s,'bid_px_00':20,'ask_px_00':21}
+                               for s in (call,put)])
+        source = pd.concat([quotes,poison],ignore_index=True)
+        results = []
+        with tempfile.TemporaryDirectory() as directory:
+            for batched in (False,True):
+                def frames(_client,_ledger,_symbols,start,end,*args):
+                    return frame_window(source,start,end) if batched else quotes.copy()
+                connection = initialize_database(Path(directory)/f'{batched}.sqlite3')
+                with patch('scripts.iv_expansion_history.build_baselines',return_value={'AAA':baseline}), \
+                     patch('scripts.iv_expansion_history._spot_frame',return_value=stocks), \
+                     patch('scripts.iv_expansion_history._option_frames',side_effect=frames) as fetch:
+                    result = process_observation_session(connection,None,None,None,rows,session,[date(2026,9,9)],
+                        max_fallback_sessions=0,option_symbol_chunk_size=100,quote_lookback_minutes=15)
+                self.assertEqual(result['observations'],13)
+                self.assertEqual(fetch.call_count,13)
+                for request in fetch.call_args_list:
+                    start,end = request.args[3:5]
+                    self.assertLessEqual((end-start).total_seconds(),961)
+                    self.assertLessEqual(end,close)
+                results.append(connection.execute('SELECT * FROM observations ORDER BY bucket').fetchall())
+                connection.close()
+        self.assertEqual(results[0],results[1])
+
     def test_missing_full_catalogue_is_restored_before_request_partitioning(self):
         from unittest.mock import Mock
         with tempfile.TemporaryDirectory() as directory:

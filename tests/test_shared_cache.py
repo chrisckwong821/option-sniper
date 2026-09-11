@@ -12,6 +12,17 @@ from scripts.historical_cache import HistoricalCache, normalized
 
 
 class CacheTests(unittest.TestCase):
+    def test_cached_archive_filters_chunks_before_concatenating(self):
+        from scripts.historical_cache import _read_interval
+        store = Mock()
+        chunks = [pd.DataFrame({'symbol':['A','B','A'], 'price':[1,2,3]},
+            index=pd.to_datetime(['2026-09-01T13:30Z','2026-09-01T14:00Z','2026-09-01T14:15Z']))]
+        store.to_df.return_value = iter(chunks)
+        result = _read_interval(store,'cbbo-1m',pd.Timestamp('2026-09-01T14:00Z').value,
+                                pd.Timestamp('2026-09-01T14:16Z').value,['A'])
+        self.assertEqual(result['price'].tolist(),[3])
+        store.to_df.assert_called_once_with(count=10000)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -148,7 +159,7 @@ class CacheTests(unittest.TestCase):
         self.entry({**self.request, 'symbols':['A','B']})
         frame = pd.DataFrame({'symbol':['A','B'], 'close':[10,20]}, index=pd.DatetimeIndex(['2026-09-01T13:31:00Z']*2, name='ts_event'))
         cache = HistoricalCache(root=self.root, shared=self.shared)
-        with patch('scripts.historical_cache.db.DBNStore.from_file', return_value=SimpleNamespace(to_df=lambda: frame)):
+        with patch('scripts.historical_cache.db.DBNStore.from_file', return_value=SimpleNamespace(to_df=lambda **kwargs: frame)):
             result=cache.get_range(**self.request).to_df()
         self.assertEqual(result['symbol'].tolist(), ['A'])
 
