@@ -67,6 +67,43 @@ class IvExpansionHistoryTests(unittest.TestCase):
             client.timeseries.get_range.assert_not_called()
             self.assertEqual(ledger.downloaded_requests, 0)
 
+    def test_baseline_fallback_fetches_only_unresolved_eligible_stocks(self):
+        from scripts.iv_expansion_history import build_baselines
+        rows = [{'ticker': t} for t in ('AAA', 'BBB')]
+        expiry = date(2026, 9, 18)
+        catalog = {t: {expiry: [{'strike': 100, 'call': t+'C', 'put': t+'P'}]} for t in ('AAA','BBB')}
+        attempts = {'AAA': 0, 'BBB': 0}
+        def estimate(ticker, *args):
+            attempts[ticker] += 1
+            return None if ticker == 'BBB' and attempts[ticker] == 1 else {'annualized_implied_vol_pct': 30}
+        with patch('scripts.iv_expansion_history._contracts_for_session', return_value=catalog), \
+             patch('scripts.iv_expansion_history._spot_frame', return_value=pd.DataFrame()) as spots, \
+             patch('scripts.iv_expansion_history.latest_spots', return_value={'AAA':100,'BBB':100}), \
+             patch('scripts.iv_expansion_history._option_frames', return_value=pd.DataFrame()), \
+             patch('scripts.iv_expansion_history.prepare_snapshot_pairs', return_value={}), \
+             patch('scripts.iv_expansion_history.estimate_snapshot_from_pairs', side_effect=estimate):
+            result = build_baselines(None, None, None, rows, date(2026,9,10),
+                [date(2026,9,8),date(2026,9,9)], spot_rows=rows+[{'ticker':'EXTRA'}],
+                max_fallback_sessions=1, option_symbol_chunk_size=100)
+        self.assertEqual([[r['ticker'] for r in c.args[2]] for c in spots.call_args_list], [['AAA','BBB'],['BBB']])
+        self.assertEqual(result['BBB'].reference_session, date(2026,9,8))
+        self.assertEqual(result['BBB'].fallback_sessions, 1)
+
+    def test_ineligible_catalog_does_not_fetch_prices_or_publish_empty_observations(self):
+        from scripts.iv_expansion_history import build_baselines, process_observation_session
+        rows = [{'ticker':'AAA'}]
+        catalog = {'AAA':{date(2026,9,11):[{'strike':100,'call':'C','put':'P'}]}}
+        with patch('scripts.iv_expansion_history._contracts_for_session', return_value=catalog), \
+             patch('scripts.iv_expansion_history._spot_frame') as spots:
+            result = build_baselines(None,None,None,rows,date(2026,9,10),[date(2026,9,9)],
+                max_fallback_sessions=0,option_symbol_chunk_size=100)
+            self.assertEqual(result,{})
+            spots.assert_not_called()
+            with self.assertRaisesRegex(RuntimeError,'No valid IV baselines'):
+                process_observation_session(None,None,None,None,rows,date(2026,9,10),[date(2026,9,9)],
+                    max_fallback_sessions=0,option_symbol_chunk_size=100,quote_lookback_minutes=15)
+            spots.assert_not_called()
+
     def test_unresolved_historical_symbols_are_empty_but_auth_errors_propagate(self):
         from databento.common.error import BentoClientError
         from unittest.mock import Mock
