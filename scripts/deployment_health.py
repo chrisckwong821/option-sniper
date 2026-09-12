@@ -41,7 +41,7 @@ def check(payload, now=None):
         errors.append('Compatible sigma calibration is not loaded for the dashboard date')
     if calibration.get('error'):
         errors.append('Calibration refresh reports an error')
-    if not iv.get('reference_symbols') or (not premarket and not iv.get('calculated_symbols')):
+    if not iv.get('reference_symbols') or (regular and not iv.get('calculated_symbols')):
         errors.append('IV references or observations are missing')
     feeds = payload.get('feeds', {})
     for name in ('EQUS.MINI', 'OPRA.PILLAR'):
