@@ -48,8 +48,11 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.tempdir.cleanup()
 
     async def test_state_assets_health_and_websocket(self):
-        state_response = await self.client.get("/api/state")
+        state_response = await self.client.get(
+            "/api/state", headers={"Accept-Encoding": "gzip"})
         self.assertEqual(state_response.status, 200)
+        self.assertEqual(state_response.headers["Content-Encoding"], "gzip")
+        self.assertIn("Accept-Encoding", state_response.headers["Vary"])
         state = await state_response.json()
         self.assertEqual(len(state["snapshot"]["rows"]), 20)
         self.assertEqual(len(state["today"]["rows"]), 30)
@@ -72,7 +75,11 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
             404,
         )
 
-        health = await (await self.client.get("/api/health")).json()
+        health_response = await self.client.get(
+            "/api/health", headers={"Accept-Encoding": "gzip"})
+        self.assertEqual(health_response.headers["Content-Encoding"], "gzip")
+        self.assertIn("Accept-Encoding", health_response.headers["Vary"])
+        health = await health_response.json()
         self.assertEqual(health["tracked_symbols"], 30)
         self.assertEqual(health["dashboard_state"]["data_date"], "2026-08-27")
 

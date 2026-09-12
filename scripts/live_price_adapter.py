@@ -1204,7 +1204,10 @@ def create_app(
                                   "is_stale": calibration_refresh.status.get("active_date") != universe["anchor_date"]}
         payload["history_repair"] = dict(history_repair_status)
         payload["stream"] = store.stream_metrics()
-        return web.json_response(payload)
+        response = web.json_response(payload)
+        response.headers["Vary"] = "Accept-Encoding"
+        response.enable_compression()
+        return response
 
     state_lock = asyncio.Lock()
 
@@ -1215,10 +1218,16 @@ def create_app(
         async with state_lock:
             payload = state_bundle if args.mock else await asyncio.to_thread(expected_sigma.apply, state_bundle)
         current_etag = '"' + hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest() + '"'
-        headers = {"Cache-Control": "no-store", "ETag": current_etag}
+        headers = {
+            "Cache-Control": "no-store",
+            "ETag": current_etag,
+            "Vary": "Accept-Encoding",
+        }
         if request.headers.get("If-None-Match") == current_etag:
             return web.Response(status=304, headers=headers)
-        return web.json_response(payload, headers=headers)
+        response = web.json_response(payload, headers=headers)
+        response.enable_compression()
+        return response
 
     history_repair_status = {"state": "external_worker", "error": None}
 
