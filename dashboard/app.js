@@ -899,9 +899,10 @@ function connectLivePrices() {
   });
   socket.addEventListener("close", () => {
     if (state.live.socket !== socket) return;
+    state.live.socket = null;
     state.live.connected = false;
     setConnectionState(state.live.pricesReceived ? "stale" : "snapshot", state.live.pricesReceived ? "Stale prices" : "Snapshot");
-    scheduleReconnect();
+    if (document.visibilityState === "visible") scheduleReconnect();
   });
   socket.addEventListener("error", () => socket.close());
 }
@@ -974,6 +975,10 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     refreshDashboardState().catch(() => {});
     if (!state.live.connected) connectLivePrices();
+  } else {
+    window.clearTimeout(state.live.retryTimer);
+    state.live.retryTimer = null;
+    state.live.socket?.close(1000, "Page hidden");
   }
 });
 
