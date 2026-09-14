@@ -167,6 +167,11 @@ class CacheRollbackTests(unittest.TestCase):
 
 
 class ActivationWiringTests(unittest.TestCase):
+    def test_production_alert_threshold_is_pinned_to_one_point_two_sigma(self):
+        root = Path(__file__).resolve().parents[1]
+        compose = (root / 'deploy' / 'compose.yml').read_text()
+        self.assertIn('ZSCORE_ALERT_THRESHOLD: "1.2"', compose)
+
     def test_both_lanes_use_same_guard(self):
         root = Path(__file__).resolve().parents[1]
         for name, environment in [('ec2-deploy.sh', 'production'), ('ec2-deploy-staging.sh', 'staging')]:

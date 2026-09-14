@@ -27,7 +27,7 @@ DEFAULT_BACKEND_URL = "http://backend:8765"
 DEFAULT_DATABASE = Path("/app/.cache/sigma-tape/discord-alerts.sqlite3")
 DEFAULT_DISCORD_API = "https://discord.com/api/v10"
 DEFAULT_DISCORD_CHANNEL_ID = "1544929277009465374"
-DEFAULT_THRESHOLD = 1.0
+DEFAULT_THRESHOLD = 1.2
 Z_SCORE_EPSILON = 1e-9
 
 

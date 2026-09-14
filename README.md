@@ -144,13 +144,13 @@ automatically. The existing pre-market refresh and Discord logic are unchanged.
 Open dashboards check for new lists every minute, on reconnect, and when returning
 to the tab. An unchanged Today view retains its existing live rows and filters.
 
-## Discord +1 sigma alerts
+## Discord +1.2 sigma alerts
 
 Production includes a small alert worker that consumes the backend WebSocket;
 it does not open a second Databento connection. Its alert cycle starts at 04:00
 America/New_York and covers pre-market, regular, after-hours, and the following
 overnight session. The first fresh snapshot sends every tracked ticker already
-at or above +1 expected sigma. Later alerts require an upward crossing, and a
+at or above +1.2 expected sigma. Later alerts require an upward crossing, and a
 SQLite ledger ensures that each ticker is sent at most once per alert cycle.
 
 Set these values only in the host-owned `/etc/sigma-tape/sigma-tape.env` file:
@@ -158,11 +158,11 @@ Set these values only in the host-owned `/etc/sigma-tape/sigma-tape.env` file:
 ```bash
 DISCORD_BOT_TOKEN=ROTATED_TOKEN
 DISCORD_CHANNEL_ID=1544929277009465374
-ZSCORE_ALERT_THRESHOLD=1.0
+ZSCORE_ALERT_THRESHOLD=1.2
 ```
 
-The channel shown above is the built-in default for this deployment; the
-environment variable can override it.
+The channel shown above is the built-in default for this deployment. The
+production Compose manifest pins the alert threshold to `1.2`.
 
 The bot needs View Channel and Send Messages permission in the configured
 channel. Never commit its token. If a token is pasted into chat, logs, or source
