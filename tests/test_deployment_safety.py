@@ -86,12 +86,24 @@ class HealthTests(unittest.TestCase):
         self.assertTrue(check(payload, NOW))
 
     def test_no_freshness_requirement_on_holidays_or_after_early_close(self):
-        for now in [datetime(2026, 9, 7, 14, tzinfo=timezone.utc),
+        for now in [datetime(2026, 9, 12, 15, tzinfo=timezone.utc),
+                    datetime(2026, 9, 7, 14, tzinfo=timezone.utc),
                     datetime(2026, 11, 27, 19, tzinfo=timezone.utc)]:
             payload = healthy(now)
             payload['feeds'] = {}
             payload['iv_expansions'] = []
+            payload['iv_expansion']['calculated_symbols'] = 0
             self.assertEqual(check(payload, now), [])
+
+    def test_weekend_s3_consumer_uses_friday_as_latest_closed_session(self):
+        now = datetime(2026, 9, 12, 15, tzinfo=timezone.utc)
+        payload = healthy(now)
+        payload['dashboard_state']['data_date'] = '2026-09-11'
+        payload['iv_expansion'].update(reference_date='2026-09-11', calculated_symbols=0)
+        payload['iv_expansions'] = []
+        payload['calibration'].update(
+            active_date='2026-09-10', cache_mode='s3_only', is_stale=True)
+        self.assertEqual(check(payload, now), [])
 
     def test_reference_date_not_yesterday_panel_date(self):
         payload = healthy()
