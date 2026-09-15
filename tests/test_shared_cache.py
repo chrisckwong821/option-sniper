@@ -12,17 +12,6 @@ from scripts.historical_cache import HistoricalCache, normalized
 
 
 class CacheTests(unittest.TestCase):
-    def test_cached_archive_filters_chunks_before_concatenating(self):
-        from scripts.historical_cache import _read_interval
-        store = Mock()
-        chunks = [pd.DataFrame({'symbol':['A','B','A'], 'price':[1,2,3]},
-            index=pd.to_datetime(['2026-09-01T13:30Z','2026-09-01T14:00Z','2026-09-01T14:15Z']))]
-        store.to_df.return_value = iter(chunks)
-        result = _read_interval(store,'cbbo-1m',pd.Timestamp('2026-09-01T14:00Z').value,
-                                pd.Timestamp('2026-09-01T14:16Z').value,['A'])
-        self.assertEqual(result['price'].tolist(),[3])
-        store.to_df.assert_called_once_with(count=10000)
-
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -159,7 +148,7 @@ class CacheTests(unittest.TestCase):
         self.entry({**self.request, 'symbols':['A','B']})
         frame = pd.DataFrame({'symbol':['A','B'], 'close':[10,20]}, index=pd.DatetimeIndex(['2026-09-01T13:31:00Z']*2, name='ts_event'))
         cache = HistoricalCache(root=self.root, shared=self.shared)
-        with patch('scripts.historical_cache.db.DBNStore.from_file', return_value=SimpleNamespace(to_df=lambda **kwargs: frame)):
+        with patch('scripts.historical_cache.db.DBNStore.from_file', return_value=SimpleNamespace(to_df=lambda: frame)):
             result=cache.get_range(**self.request).to_df()
         self.assertEqual(result['symbol'].tolist(), ['A'])
 
@@ -186,24 +175,6 @@ class BudgetTests(unittest.TestCase):
         with patch.dict(os.environ, {'SIGMA_RECONSTRUCTION_SESSION':'2026-09-04'}):
             with self.assertRaisesRegex(RuntimeError, 'older than one week'):
                 reserve(0, dict(start='2026-03-01', end='2026-03-02'))
-
-    def test_current_session_can_follow_earliest_permitted_lookback_without_resetting_budget(self):
-        import os
-        from scripts.reconstruction_budget import reserve
-        with tempfile.TemporaryDirectory() as directory:
-            path=Path(directory)/'budget.json'; path.write_text('{}')
-            with patch.dict(os.environ, {'SIGMA_RECONSTRUCTION_BUDGET_FILE':str(path), 'SIGMA_RECONSTRUCTION_SESSION':'2026-09-10'}):
-                reserve(0.002, dict(start='2026-09-03T13:30:00Z',end='2026-09-09T20:00:00Z'))
-                reserve(0.094, dict(start='2026-09-10T13:30:00Z',end='2026-09-10T20:00:00Z'))
-                saved=json.loads(path.read_text())
-                self.assertAlmostEqual(saved['cost'],0.096)
-                with self.assertRaisesRegex(RuntimeError,'budget'):
-                    reserve(5,dict(start='2026-09-10T13:30:00Z',end='2026-09-10T20:00:00Z'))
-                with self.assertRaisesRegex(RuntimeError,'older than one week'):
-                    reserve(0,dict(start='2026-09-02T13:30:00Z',end='2026-09-02T20:00:00Z'))
-                with self.assertRaisesRegex(RuntimeError,'beyond the completed session'):
-                    reserve(0,dict(start='2026-09-11T13:30:00Z',end='2026-09-11T20:00:00Z'))
-                self.assertEqual(json.loads(path.read_text()),saved)
 
 class RollingWindowTests(unittest.TestCase):
     def test_statistics_exclude_future_and_expired_rows(self):

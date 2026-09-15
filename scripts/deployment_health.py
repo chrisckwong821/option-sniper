@@ -17,10 +17,6 @@ def check(payload, now=None):
     trading_day = calendar.is_session(session)
     regular = trading_day and calendar.session_open(session) <= now < calendar.session_close(session)
     premarket = trading_day and local_now.hour >= 4 and now < calendar.session_open(session)
-    if trading_day and now < calendar.session_close(session):
-        latest_closed_session = calendar.previous_session(session)
-    else:
-        latest_closed_session = calendar.date_to_session(session, direction='previous')
     def fresh(value, seconds):
         try:
             stamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
@@ -39,13 +35,13 @@ def check(payload, now=None):
     # S3-only consumers may explicitly retain the immediately prior calibration
     # while the publisher repairs it. Never accept older/unversioned statistics;
     # regular trading still requires fresh live observations and feed records.
-    if (premarket or (calibration.get("cache_mode") == "s3_only" and calibration.get("is_stale") is True)) and reference_date == str(latest_closed_session.date()):
+    if (premarket or (calibration.get("cache_mode") == "s3_only" and calibration.get("is_stale") is True)) and reference_date == str(calendar.previous_session(session).date()):
         compatible = compatible or calibration.get('active_date') == str(calendar.previous_session(reference_date).date())
     if not calibration.get('active_version') or not compatible:
         errors.append('Compatible sigma calibration is not loaded for the dashboard date')
     if calibration.get('error'):
         errors.append('Calibration refresh reports an error')
-    if not iv.get('reference_symbols') or (regular and not iv.get('calculated_symbols')):
+    if not iv.get('reference_symbols') or (not premarket and not iv.get('calculated_symbols')):
         errors.append('IV references or observations are missing')
     feeds = payload.get('feeds', {})
     for name in ('EQUS.MINI', 'OPRA.PILLAR'):

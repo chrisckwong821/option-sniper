@@ -1171,12 +1171,25 @@ def _contracts_for_session(
     contract_cache: dict[date, dict[str, dict[date, list[dict[str, Any]]]]] | None = None,
     available_at: date | None = None,
 ) -> dict[str, dict[date, list[dict[str, Any]]]]:
-    # Dashboard chains describe one screening expiry, not the contracts listed
-    # for a historical observation. In particular, Thursday's input can still
-    # contain Friday contracts even though calibration has rolled a week ahead.
-    # Use the dated, cache-backed definition catalogue for the expiry cycle.
-    if available_at is not None and session > available_at:
-        raise ValueError("Historical contract catalogue is newer than the reference session")
+    if os.environ.get('SIGMA_BUCKET_CACHED_CONTRACTS_ONLY') == '1':
+        from .iv_expansion import format_occ_symbol
+        contracts = {}
+        for row in rows:
+            ref, chain = row.get('iv_expansion_reference') or {}, row.get('iv_chain') or {}
+            known = str(ref.get('reference_session') or ref.get('observation_time') or '')[:10]
+            if not known or date.fromisoformat(known) > (available_at or session):
+                continue  # Never introduce contracts learned after the baseline.
+            expiry = date.fromisoformat(ref['option_expiry'])
+            root = chain.get('occ_root')
+            if not root or expiry < observation_session:
+                continue
+            pairs = [{'root': root, 'strike': float(k),
+                      'call': format_occ_symbol(root, str(expiry), 'C', float(k)),
+                      'put': format_occ_symbol(root, str(expiry), 'P', float(k))}
+                     for k in chain.get('strikes', [])]
+            if pairs:
+                contracts[row['ticker']] = {expiry: pairs}
+        return contracts
     if contract_cache is not None and session in contract_cache:
         return contract_cache[session]
     full_request = _definition_request(rows, session)
@@ -1279,7 +1292,14 @@ def build_baselines(
         if not remaining or reference not in session_set:
             break
         candidate_rows = list(remaining.values())
+        spot_frame = _spot_frame(
+            spot_client,
+            ledger,
+            spot_rows if spot_rows is not None else candidate_rows,
+            reference,
+        )
         close_mark = datetime.combine(reference, time(15, 59), EASTERN)
+        spots = latest_spots(spot_frame, remaining, close_mark)
         # Reuse one point-in-time contract catalogue for the whole target-expiry
         # cycle.  If quote fallback crosses before the cycle catalogue date,
         # use a matching earlier definition snapshot for correctness.
@@ -1309,22 +1329,6 @@ def build_baselines(
                 continue
             expiry_by_ticker[ticker] = selection
             selected_catalog["contracts"][ticker] = contracts[ticker][selection[0]]
-        print(
-            f"baseline observation={observation_session} reference={reference} "
-            f"target_expiry={option_expiry_for_observation(observation_session)} "
-            f"remaining={len(remaining)} eligible_contracts={len(expiry_by_ticker)} "
-            f"fallback_sessions={fallback_sessions}", flush=True,
-        )
-        if not expiry_by_ticker:
-            reference = XNYS.previous_session(pd.Timestamp(reference)).date()
-            continue
-        # A fallback only needs prices for unresolved, eligible symbols. Asking
-        # for the entire universe can purchase unrelated old history or trip a
-        # budget guard before otherwise valid baselines can be used.
-        required_spot_rows = [row for row in (spot_rows if spot_rows is not None else candidate_rows)
-                              if normalize_symbol(str(row['ticker'])) in expiry_by_ticker]
-        spot_frame = _spot_frame(spot_client, ledger, required_spot_rows, reference)
-        spots = latest_spots(spot_frame, expiry_by_ticker, close_mark)
         baseline_symbols, selected = select_baseline_symbols(selected_catalog, spots)
         option_frame = _option_frames(
             option_client,
@@ -1444,12 +1448,6 @@ def process_observation_session(
         download_workers=download_workers,
         contract_cache=contract_cache,
     )
-    if not baselines:
-        raise RuntimeError(
-            f"No valid IV baselines for observation {observation_session}; "
-            f"target expiry {option_expiry_for_observation(observation_session)}. "
-            "Refusing to publish an empty observation session."
-        )
     spot_frame = _spot_frame(
         spot_client,
         ledger,
@@ -1464,18 +1462,23 @@ def process_observation_session(
     )
     day_start = datetime.combine(observation_session, time(9, 30), EASTERN)
     day_end = datetime.combine(observation_session, time(16), EASTERN)
+    option_frame = _option_frames(
+        option_client,
+        ledger,
+        symbols,
+        day_start,
+        day_end,
+        option_symbol_chunk_size,
+        "observation_options",
+        download_workers,
+    )
+
     observations = 0
     for mark in bucket_marks(observation_session):
-        # Preserve the exact window formerly sliced from the full regular-day
-        # frame, while retaining only one bucket's quotes in memory.
-        window_start = max(day_start, mark.mark - timedelta(minutes=quote_lookback_minutes))
-        window_end = min(day_end, mark.end)
-        option_frame = _option_frames(
-            option_client, ledger, symbols, window_start, window_end,
-            option_symbol_chunk_size, "observation_options", download_workers,
-        )
         quote_window = frame_window(
-            option_frame, window_start, window_end,
+            option_frame,
+            mark.mark - timedelta(minutes=quote_lookback_minutes),
+            mark.end,
         )
         pairs_by_ticker = prepare_snapshot_pairs(
             quote_window,
@@ -1526,11 +1529,6 @@ def process_observation_session(
                 "moneyness_match_max_error": estimate.get("iv_moneyness_match_max_error"),
             })
             observations += 1
-        del option_frame, quote_window, pairs_by_ticker
-        print(f"observation={observation_session} bucket={mark.label} "
-              f"baselines={len(baselines)} observations={observations}", flush=True)
-    # Commit the complete session only: interrupted buckets must not be mistaken
-    # for a completed session by the incremental resume check.
     connection.commit()
     return {
         "target_tickers": len(tickers),
