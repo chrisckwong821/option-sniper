@@ -33,6 +33,7 @@ previous_revision="$(basename "$previous")"
 exec 9>"$cache/refresh.lock"
 flock -x 9
 install -d -m 0700 "$cache-deploy-backups"
+python3 "$release/scripts/deployment_cache.py" prune "$cache" "$cache-deploy-backups"
 snapshot="$(mktemp -d "$cache-deploy-backups/$revision.XXXXXX")"
 stopped=false
 saved=false

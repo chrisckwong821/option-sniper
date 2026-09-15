@@ -1,11 +1,14 @@
 import copy
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
-from scripts.deployment_cache import backup, restore
+from types import SimpleNamespace
+from unittest.mock import patch
+from scripts.deployment_cache import backup, prune, restore
 from scripts.deployment_health import check
 
 
@@ -100,6 +103,34 @@ class HealthTests(unittest.TestCase):
 
 
 class CacheRollbackTests(unittest.TestCase):
+    def test_prune_removes_abandoned_then_oldest_snapshot_until_space_is_safe(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'cache'
+            snapshots = Path(directory) / 'snapshots'
+            root.mkdir()
+            snapshots.mkdir()
+            (root / 'dashboard-state.json').write_text('current')
+            old = snapshots / 'old'
+            newest = snapshots / 'newest'
+            abandoned = snapshots / 'abandoned'
+            for path in (old, newest, abandoned):
+                path.mkdir()
+            (old / 'manifest.json').write_text('{}')
+            (newest / 'manifest.json').write_text('{}')
+            os.utime(old, (1, 1))
+            os.utime(newest, (2, 2))
+
+            def available(_):
+                return SimpleNamespace(free=0 if old.exists() else 2 * 1024**3)
+
+            with patch('scripts.deployment_cache.shutil.disk_usage', side_effect=available):
+                removed = prune(root, snapshots)
+
+            self.assertEqual(removed, ['abandoned', 'old'])
+            self.assertFalse(old.exists())
+            self.assertFalse(abandoned.exists())
+            self.assertTrue(newest.exists())
+
     def test_restore_old_cache_without_reverting_new_discord_alerts(self):
         with tempfile.TemporaryDirectory() as directory:
             root, saved = Path(directory) / 'cache', Path(directory) / 'snapshot'

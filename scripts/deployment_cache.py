@@ -13,6 +13,7 @@ FILES = ('dashboard-state.json', 'yesterday-state.json', 'live-prices.json',
          'live-iv-expansion.json', 'option-contracts.json',
          'iv-expansion-statistics-session-batch.json',
          'iv-expansion-history-session-batch.sqlite3')
+MINIMUM_FREE_BYTES = 1024**3
 
 
 def digest(path):
@@ -28,13 +29,44 @@ def validate_paths(root, snapshot):
         raise ValueError('Cache and snapshot must be separate directories')
 
 
+def required_bytes(root):
+    return sum((root / name).stat().st_size for name in FILES if (root / name).exists())
+
+
+def prune(root, snapshot_root):
+    """Remove abandoned snapshots, then oldest snapshots only as space requires."""
+    root, snapshot_root = Path(root).resolve(), Path(snapshot_root).resolve()
+    validate_paths(root, snapshot_root)
+    snapshot_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    candidates = sorted(
+        (path for path in snapshot_root.iterdir() if path.is_dir() and not path.is_symlink()),
+        key=lambda path: path.stat().st_mtime,
+    )
+    removed = []
+    completed = []
+    for path in candidates:
+        if not (path / 'manifest.json').is_file():
+            shutil.rmtree(path)
+            removed.append(path.name)
+        else:
+            completed.append(path)
+    required = required_bytes(root) + MINIMUM_FREE_BYTES
+    while shutil.disk_usage(snapshot_root).free < required and completed:
+        path = completed.pop(0)
+        shutil.rmtree(path)
+        removed.append(path.name)
+    if shutil.disk_usage(snapshot_root).free < required:
+        raise RuntimeError('Insufficient snapshot headroom after pruning old snapshots')
+    return removed
+
+
 def backup(root, snapshot):
     root, snapshot = Path(root).resolve(), Path(snapshot).resolve()
     validate_paths(root, snapshot)
     if snapshot.exists() and any(snapshot.iterdir()):
         raise ValueError('Snapshot must be empty')
-    required = sum((root / n).stat().st_size for n in FILES if (root / n).exists())
-    if shutil.disk_usage(snapshot.parent).free < required + 1024**3:
+    required = required_bytes(root)
+    if shutil.disk_usage(snapshot.parent).free < required + MINIMUM_FREE_BYTES:
         raise RuntimeError('Insufficient snapshot headroom: retain at least 1 GiB free')
     snapshot.mkdir(mode=0o700, parents=True, exist_ok=True)
     manifest = {'root': str(root), 'files': {}}
@@ -98,9 +130,12 @@ def restore(root, snapshot):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['backup', 'restore'])
+    parser.add_argument('action', choices=['backup', 'restore', 'prune'])
     parser.add_argument('root', type=Path)
     parser.add_argument('snapshot', type=Path)
     args = parser.parse_args()
-    globals()[args.action](args.root, args.snapshot)
-    print(json.dumps({'action': args.action, 'status': 'passed', 'snapshot': str(args.snapshot)}))
+    result = globals()[args.action](args.root, args.snapshot)
+    payload = {'action': args.action, 'status': 'passed', 'snapshot': str(args.snapshot)}
+    if args.action == 'prune':
+        payload['removed'] = result
+    print(json.dumps(payload))
