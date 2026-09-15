@@ -21,6 +21,9 @@ case "$environment" in
     ;;
   *) exit 2 ;;
 esac
+skip_cache_guard="${SIGMA_SKIP_CACHE_GUARD:-0}"
+[[ "$skip_cache_guard" == 0 || "$skip_cache_guard" == 1 ]] || exit 2
+[[ "$environment" == production || "$skip_cache_guard" == 0 ]] || exit 2
 release="$base/releases/$revision"
 previous="$(readlink -f "$base/current")"
 [[ "$previous" == "$base/releases/"* && -d "$previous" && -d "$release" ]] || exit 2
@@ -120,10 +123,12 @@ rollback() {
 }
 trap 'rollback $?' ERR
 trap 'rollback 130' INT TERM
-if [[ "$environment" == production ]]; then
+if [[ "$environment" == production && "$skip_cache_guard" == 0 ]]; then
   # Capture before touching production; a missing staging reference fails safely.
   python3 "$release/scripts/verify_sigma_parity.py" --capture \
     --reference "$snapshot-staging-sigma.json" --url http://127.0.0.1:8766/api/state
+elif [[ "$environment" == production ]]; then
+  echo "Skipping staging sigma/cache parity for explicitly approved release $revision"
 fi
 stopped=true
 compose_at "$previous" "$previous_revision" stop "${services[@]}"
@@ -134,8 +139,10 @@ if [[ "$environment" == production ]]; then
   compose_at "$release" "$revision" up -d --no-build --force-recreate backend
   # Check before starting the alerter or accepting the new release. A data
   # mismatch immediately takes the cache/image rollback path, without a build.
-  python3 "$release/scripts/verify_sigma_parity.py" \
-    --reference "$snapshot-staging-sigma.json" --url http://127.0.0.1:8765/api/state --wait-seconds 30
+  if [[ "$skip_cache_guard" == 0 ]]; then
+    python3 "$release/scripts/verify_sigma_parity.py" \
+      --reference "$snapshot-staging-sigma.json" --url http://127.0.0.1:8765/api/state --wait-seconds 30
+  fi
   compose_at "$release" "$revision" up -d --no-build alerter
 else
   compose_at "$release" "$revision" up -d --no-build --force-recreate "${services[@]}"

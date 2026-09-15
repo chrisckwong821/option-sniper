@@ -4,6 +4,13 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+  workflow_dispatch:
+    inputs:
+      skip_cache_guard:
+        description: Skip staging sigma/cache parity for this approved release
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -15,20 +22,22 @@ concurrency:
 jobs:
   deploy:
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.event == 'push'
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
     env:
       DEPLOY_HOST: ${{ secrets.EC2_HOST }}
       DEPLOY_USER: ${{ secrets.EC2_USER }}
-      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+      DEPLOY_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
+      SKIP_CACHE_GUARD: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_cache_guard && '1' || '0' }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ env.DEPLOY_SHA }}
 
       - name: Configure trusted SSH access
         env:
@@ -83,6 +92,6 @@ jobs:
             "$discord_token_path" \
             "$DEPLOY_USER@$DEPLOY_HOST:$remote_discord_token"
           ssh "${ssh_options[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "bash -s -- '$REVISION' '$ARCHIVE_SHA256' '$remote_discord_token'" \
+            "bash -s -- '$REVISION' '$ARCHIVE_SHA256' '$remote_discord_token' '$SKIP_CACHE_GUARD'" \
             < deploy/ec2-deploy.sh
           rm -f "$discord_token_path"

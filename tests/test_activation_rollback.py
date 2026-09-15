@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ActivationRollbackTests(unittest.TestCase):
-    def run_drill(self, environment, sigma_mismatch=False):
+    def run_drill(self, environment, sigma_mismatch=False, skip_cache_guard=False):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()
             base, cache, units, commands = [root / n for n in ('releases-root', 'cache', 'units', 'bin')]
@@ -66,6 +66,7 @@ exit 0
                    'GUARD_LOG': str(root / 'commands.log'), 'GUARD_STATE': str(root / 'version'),
                    'GUARD_CACHE': str(cache), 'GUARD_MODE': environment,
                    'GUARD_SIGMA_MISMATCH': '1' if sigma_mismatch else '0',
+                   'SIGMA_SKIP_CACHE_GUARD': '1' if skip_cache_guard else '0',
                    'SIGMA_STAGING_FAIL_HEALTH': '1' if environment == 'staging' else '0'}
             result = subprocess.run(['bash', str(guard), environment, '22222222'],
                                     env=env, text=True, capture_output=True, timeout=30)
@@ -74,7 +75,7 @@ exit 0
             self.assertEqual((cache / 'dashboard-state.json').read_text(), 'original')
             self.assertEqual((base / 'current').resolve().name, '11111111')
             self.assertEqual((root / 'version').read_text().strip(), '11111111')
-            if sigma_mismatch:
+            if sigma_mismatch and not skip_cache_guard:
                 self.assertIn('sigma_match: false', result.stdout)
                 log = (root / 'commands.log').read_text()
                 self.assertIn('stop -t 3', log)
@@ -82,6 +83,14 @@ exit 0
                 self.assertNotIn('Release readiness failed', result.stderr)
             elif environment == 'production':
                 self.assertIn('Release readiness failed', result.stderr)
+                if skip_cache_guard:
+                    self.assertNotIn('sigma_match: false', result.stdout)
+                    self.assertIn('Skipping staging sigma/cache parity', result.stdout)
+                    log = (root / 'commands.log').read_text()
+                    self.assertIn(
+                        '22222222 compose -f deploy/compose.yml up -d --no-build alerter',
+                        log,
+                    )
             else:
                 self.assertIn('Intentional staging readiness failure', result.stderr)
 
@@ -93,3 +102,6 @@ exit 0
 
     def test_sigma_mismatch_rolls_back_before_starting_alerter(self):
         self.run_drill('production', sigma_mismatch=True)
+
+    def test_approved_skip_bypasses_only_sigma_parity(self):
+        self.run_drill('production', sigma_mismatch=True, skip_cache_guard=True)
