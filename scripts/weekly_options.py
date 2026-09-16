@@ -8,7 +8,7 @@ import re
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 SOURCE_URL = "https://marketdata.theocc.com/weekly-options?action=download"
 SOURCE_PAGE = "https://www.theocc.com/market-data/market-data-reports/series-and-trading-data/weekly-and-quarterly-options"
@@ -100,7 +100,8 @@ def main():
     if args.input:
         raw = args.input.read_bytes()
     else:
-        with urlopen(SOURCE_URL, timeout=30) as response:
+        request = Request(SOURCE_URL, headers={"User-Agent": "Mozilla/5.0"})
+        with urlopen(request, timeout=30) as response:
             raw = response.read()
     data = parse_report(raw.decode("utf-8-sig"))
     data.update(retrieved_at=datetime.now(UTC).isoformat(), sha256=hashlib.sha256(raw).hexdigest())

@@ -1,4 +1,5 @@
 import json
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -69,3 +70,12 @@ class WeeklyOptionsTests(unittest.TestCase):
                 download.reset_mock()
                 main()
                 download.assert_not_called()
+
+    def test_download_uses_occ_accepted_user_agent(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "list.json"
+            with patch("sys.argv", ["weekly_options", "--output", str(path)]), patch("scripts.weekly_options.urlopen", return_value=io.BytesIO(REPORT.encode())) as download:
+                main()
+                request = download.call_args.args[0]
+                self.assertEqual(request.get_header("User-agent"), "Mozilla/5.0")
+                self.assertEqual(load_report(path)["symbols"], ["AAPL", "BRKB"])
