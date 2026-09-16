@@ -124,8 +124,10 @@ this file in the same directory using `--output`. Membership is fixed for the
 server lifetime so displayed coverage and subscriptions stay consistent. Missing,
 invalid, or nonmatching lists stop non-mock startup rather than subscribing to
 an unrestricted universe. The report date is displayed in the dashboard.
-Production and staging deployment scripts import the latest OCC list before
-activation and abort if the import fails. Stored source snapshots are preserved.
+Production and staging deployment scripts validate the installed OCC list before
+activation, downloading it only when unavailable. If the host cannot reach OCC,
+import a downloaded report with `--input` before deploying. Refresh the installed
+list with the command above and restart to apply membership changes. Stored source snapshots are preserved.
 Mock mode can run without the OCC file.
 
 Set credentials in the environment or an EC2 secret mechanism. Never put them

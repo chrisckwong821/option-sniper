@@ -90,7 +90,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, help="Previously downloaded OCC CSV report")
     parser.add_argument("--output", type=Path, default=Path(".cache/sigma-tape/occ-weekly-options.json"))
+    parser.add_argument("--ensure", action="store_true", help="Reuse an existing validated list; download only if unavailable")
     args = parser.parse_args()
+    if args.ensure and not args.input:
+        cached = load_report(args.output)
+        if cached["status"] == "available":
+            print(f"Using installed OCC report {cached['as_of']}: {len(cached['symbols'])} weekly products")
+            return
     if args.input:
         raw = args.input.read_bytes()
     else:

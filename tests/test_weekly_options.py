@@ -2,8 +2,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from scripts.weekly_options import load_report, parse_report, weekly_universe
+from scripts.weekly_options import load_report, main, parse_report, weekly_universe
 
 
 REPORT = """Active Weekly Options Summary as of 09/09/2026,,,,,,
@@ -57,3 +58,14 @@ class WeeklyOptionsTests(unittest.TestCase):
                 self.assertEqual(load_report(path)["status"], "unavailable")
             path.write_text(json.dumps(parse_report(REPORT)))
             self.assertEqual(load_report(path)["status"], "available")
+
+    def test_ensure_reuses_valid_cache_but_does_not_accept_invalid_cache(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "list.json"
+            with patch("sys.argv", ["weekly_options", "--ensure", "--output", str(path)]), patch("scripts.weekly_options.urlopen", side_effect=OSError("blocked")) as download:
+                with self.assertRaises(OSError):
+                    main()
+                path.write_text(json.dumps(parse_report(REPORT)))
+                download.reset_mock()
+                main()
+                download.assert_not_called()
