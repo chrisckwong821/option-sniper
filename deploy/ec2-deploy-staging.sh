@@ -100,6 +100,12 @@ cd "$release"
 sudo env SIGMA_TAPE_VERSION="$revision" \
   docker compose -f deploy/compose.staging.yml build
 
+# Validate and atomically install the required OCC list before restarting.
+# Failure leaves the currently serving release untouched.
+sudo env SIGMA_TAPE_VERSION="$revision" \
+  docker compose -f deploy/compose.staging.yml run --rm --no-deps \
+  --entrypoint python backend -m scripts.weekly_options
+
 # Semantic readiness and code/cache rollback are shared with production.
 sudo bash "$release/deploy/guarded-activate.sh" staging "$revision"
 curl -fsS --max-time 10 http://127.0.0.1:8766/api/health >/dev/null
