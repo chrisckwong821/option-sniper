@@ -90,11 +90,11 @@ cd "$release"
 sudo env SIGMA_TAPE_VERSION="$revision" \
   docker compose -f deploy/compose.yml build
 
-# Validate the installed OCC list, or import it if missing before restarting.
+# Refresh the OCC list, falling back to a validated cached list on request failure before restarting.
 # Failure leaves the currently serving release untouched.
 sudo env SIGMA_TAPE_VERSION="$revision" \
   docker compose -f deploy/compose.yml run --rm --no-deps \
-  --entrypoint python backend -m scripts.weekly_options --ensure
+  --entrypoint python backend -m scripts.weekly_options
 
 # Fail-closed semantic checks, including the alerter, and code/cache rollback.
 sudo env SIGMA_SKIP_CACHE_GUARD="$skip_cache_guard" \

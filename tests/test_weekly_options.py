@@ -60,16 +60,20 @@ class WeeklyOptionsTests(unittest.TestCase):
             path.write_text(json.dumps(parse_report(REPORT)))
             self.assertEqual(load_report(path)["status"], "available")
 
-    def test_ensure_reuses_valid_cache_but_does_not_accept_invalid_cache(self):
+    def test_failed_request_uses_valid_cache_but_rejects_missing_or_invalid_cache(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "list.json"
-            with patch("sys.argv", ["weekly_options", "--ensure", "--output", str(path)]), patch("scripts.weekly_options.urlopen", side_effect=OSError("blocked")) as download:
+            with patch("sys.argv", ["weekly_options", "--output", str(path)]), patch("scripts.weekly_options.urlopen", side_effect=OSError("blocked")) as download:
                 with self.assertRaises(OSError):
                     main()
                 path.write_text(json.dumps(parse_report(REPORT)))
                 download.reset_mock()
                 main()
-                download.assert_not_called()
+                download.assert_called_once()
+                self.assertEqual(load_report(path)["symbols"], ["AAPL", "BRKB"])
+                path.write_text("bad")
+                with self.assertRaises(OSError):
+                    main()
 
     def test_download_uses_occ_accepted_user_agent(self):
         with tempfile.TemporaryDirectory() as folder:

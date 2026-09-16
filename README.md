@@ -124,9 +124,10 @@ this file in the same directory using `--output`. Membership is fixed for the
 server lifetime so displayed coverage and subscriptions stay consistent. Missing,
 invalid, or nonmatching lists stop non-mock startup rather than subscribing to
 an unrestricted universe. The report date is displayed in the dashboard.
-Production and staging deployment scripts validate the installed OCC list before
-activation, downloading it only when unavailable. If the host cannot reach OCC,
-import a downloaded report with `--input` before deploying. Refresh the installed
+Production and staging deployment scripts request the latest OCC list before
+activation. If the request fails, they reuse a validated cached OCC list and log
+its original report date. If neither is usable, deployment aborts. A downloaded
+report can also be imported with `--input`. Refresh the installed
 list with the command above and restart to apply membership changes. Stored source snapshots are preserved.
 Mock mode can run without the OCC file.
 
