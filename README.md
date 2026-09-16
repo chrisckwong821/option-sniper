@@ -104,6 +104,30 @@ to the prior release on failure. Databento credentials remain only on EC2.
 
 ## Live data
 
+### OCC weekly-options universe
+
+The server restricts both dashboard lists to OCC weekly-program members before
+building equity subscriptions, option subscriptions, or IV tracking. Valid IV
+Coverage and reliability counts describe the filtered universe. Membership uses
+the OCC option root, with a normalized ticker fallback, independently of the
+selected contract expiry. There is no browser availability filter.
+
+Import the latest public OCC list, then restart the local server to apply it:
+
+```bash
+python -m scripts.weekly_options
+```
+
+The command validates the current (left-hand) list before atomically replacing
+`.cache/sigma-tape/occ-weekly-options.json`. For a custom `--state-cache`, put
+this file in the same directory using `--output`. Membership is fixed for the
+server lifetime so displayed coverage and subscriptions stay consistent. Missing,
+invalid, or nonmatching lists stop non-mock startup rather than subscribing to
+an unrestricted universe. The report date is displayed in the dashboard.
+Production and staging deployment scripts import the latest OCC list before
+activation and abort if the import fails. Stored source snapshots are preserved.
+Mock mode can run without the OCC file.
+
 Set credentials in the environment or an EC2 secret mechanism. Never put them
 in Git or browser JavaScript.
 

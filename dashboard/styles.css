@@ -231,6 +231,17 @@ h1 {
   border-bottom: 1px solid var(--line);
 }
 
+.weekly-options-note {
+  margin: 0;
+  padding: 10px 24px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  border-bottom: 1px solid var(--line);
+}
+
+.weekly-options-note a { color: #8fcbb4; }
+
 .control-band input,
 .control-band select {
   width: 100%;
