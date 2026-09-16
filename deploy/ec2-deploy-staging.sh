@@ -104,7 +104,7 @@ sudo env SIGMA_TAPE_VERSION="$revision" \
 # Failure leaves the currently serving release untouched.
 sudo env SIGMA_TAPE_VERSION="$revision" \
   docker compose -f deploy/compose.staging.yml run --rm --no-deps \
-  --entrypoint python backend -m scripts.weekly_options
+  --entrypoint python backend -m scripts.weekly_options </dev/null
 
 # Semantic readiness and code/cache rollback are shared with production.
 sudo bash "$release/deploy/guarded-activate.sh" staging "$revision"
