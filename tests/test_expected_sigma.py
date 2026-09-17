@@ -512,3 +512,25 @@ class SharedSigmaTests(unittest.TestCase):
         result = self.sigma.apply(bundle(), when)
         self.assertEqual(result['expected_sigma']['status'], 'fresh')
         self.assertEqual(result['today']['rows'][0]['return_anchor_price'], 106)
+
+    def test_replay_retains_only_requested_expiry_before_caching(self):
+        from unittest.mock import MagicMock
+        from types import SimpleNamespace
+        from scripts.expected_sigma import replay_quotes
+        class Mapping(SimpleNamespace): pass
+        class System(SimpleNamespace): pass
+        client = MagicMock()
+        close = at('2026-09-16T20:00:00+00:00')
+        def emit():
+            receive = client.add_callback.call_args.args[0]
+            for instrument, symbol in [(1, 'AAA   260918C00100000'), (2, 'AAA   260925C00100000')]:
+                receive(Mapping(instrument_id=instrument, stype_out_symbol=symbol))
+                receive(SimpleNamespace(instrument_id=instrument, ts_recv=int(close.timestamp()*1e9),
+                                        pretty_bid_px_00=1, pretty_ask_px_00=2))
+            receive(System(code=3))
+        client.start.side_effect = emit
+        with patch('scripts.expected_sigma.db.Live', return_value=client), \
+             patch('scripts.expected_sigma.db.SymbolMappingMsg', Mapping), \
+             patch('scripts.expected_sigma.db.SystemMsg', System):
+            quotes = replay_quotes('test', ['AAA'], close, expiry='2026-09-25')
+        self.assertEqual([q['symbol'] for q in quotes], ['AAA   260925C00100000'])

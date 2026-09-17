@@ -197,17 +197,22 @@ def latest_closing_estimates(quotes, candidates, option_expiry, close, window_mi
     return selected, selected_times
 
 
-def replay_quotes(key, tickers, close, timeout=60, *, contracts=None):
+def replay_quotes(key, tickers, close, timeout=60, *, contracts=None, expiry=None):
     """Bounded live replay of closing CBBOs; never accept post-close quotes."""
     client = db.Live(key=key, heartbeat_interval_s=5)
     mappings, quotes, errors = {}, {}, []
     complete = False
     start = close - timedelta(seconds=60)
+    expiry_code = pd.Timestamp(expiry).strftime("%y%m%d") if expiry else None
 
     def receive(record):
         nonlocal complete
         if isinstance(record, db.SymbolMappingMsg):
-            mappings[record.instrument_id] = str(record.stype_out_symbol).rstrip("\x00")
+            symbol = str(record.stype_out_symbol).rstrip("\x00")
+            if expiry_code is None or symbol[-15:-9] == expiry_code:
+                mappings[record.instrument_id] = symbol
+            else:
+                mappings.pop(record.instrument_id, None)
         elif isinstance(record, db.ErrorMsg):
             errors.append(str(record.msg))
             client.stop()
@@ -409,7 +414,8 @@ class ExpectedSigma:
             replay_error = None
             if live_key and now - (close - timedelta(minutes=1)) < timedelta(hours=24):
                 try:
-                    quotes = replay_quotes(live_key, missing_quotes, close, contracts=contracts)
+                    quotes = replay_quotes(live_key, missing_quotes, close, contracts=contracts,
+                                           expiry=plan["option_expiry"])
                     source = "live_replay"
                 except Exception as exc:
                     replay_error = exc
