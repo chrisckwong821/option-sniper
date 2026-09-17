@@ -7,7 +7,7 @@ from pathlib import Path
 from .shared_cache import SharedCache
 
 
-def ensure_bucket_statistics(root, state, allow_download=True):
+def ensure_bucket_statistics(root, state, allow_download=True, *, ticker_source=None):
     root = Path(root).resolve()
     if not SharedCache(root).enabled:
         return
@@ -30,7 +30,7 @@ def ensure_bucket_statistics(root, state, allow_download=True):
         # An older observation database is a useful incremental reconstruction seed.
         restore(root, target, state['screening_policy_fingerprint'], include_state=False, history_only=True)
     command = [sys.executable, '-m', 'scripts.iv_expansion_history', '--mode', 'batch',
-               '--ticker-source', str(root / 'dashboard-state.json'), '--end-date', target,
+               '--ticker-source', str(ticker_source or root / 'dashboard-state.json'), '--end-date', target,
                '--database', str(root / 'iv-expansion-history-session-batch.sqlite3'),
                '--cache-root', str(root / 'iv-expansion-history'), '--stats-output', str(stats_path),
                '--max-cost', '5', '--download-retries', '0', '--download-workers', '1']
