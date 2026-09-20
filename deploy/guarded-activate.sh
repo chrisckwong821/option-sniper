@@ -189,3 +189,19 @@ if [[ "$environment" == production ]]; then
 fi
 trap - ERR INT TERM
 echo "Activation verified: $revision; rollback snapshot retained at $snapshot"
+if [[ "$environment" == production ]]; then
+  # Persist one rollback target for the daily host policy after acceptance.
+  install -d -m 0755 /usr/local/lib/option-sniper
+  install -m 0644 "$release/scripts/retain_production_images.py" /usr/local/lib/option-sniper/retain_production_images.py
+  if [[ "$previous_revision" != "$revision" ]]; then
+    printf '%s\n' "$previous_revision" > "$base/rollback-image.tmp"
+    mv "$base/rollback-image.tmp" "$base/rollback-image"
+  fi
+  for extension in service timer; do
+    install -m 0644 "$release/deploy/option-sniper-image-retention.$extension" "/etc/systemd/system/option-sniper-image-retention.$extension"
+  done
+  systemctl daemon-reload
+  systemctl enable --now option-sniper-image-retention.timer
+  python3 /usr/local/lib/option-sniper/retain_production_images.py --host --apply || \
+    echo 'WARNING: image retention failed; accepted release remains active' >&2
+fi
