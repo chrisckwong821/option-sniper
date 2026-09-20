@@ -86,6 +86,9 @@ if [[ ! -f "$release/.release-revision" ]] || \
 fi
 sudo chmod 0755 "$release"
 
+# Exclude daily image retention while building and activating a candidate.
+exec 8>/tmp/option-sniper-image-retention.lock
+flock -x 8
 cd "$release"
 sudo env SIGMA_TAPE_VERSION="$revision" \
   docker compose -f deploy/compose.yml build

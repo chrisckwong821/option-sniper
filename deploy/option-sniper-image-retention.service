@@ -1,0 +1,8 @@
+[Unit]
+Description=Retain active and one rollback Option Sniper image
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flock -x /tmp/option-sniper-image-retention.lock /usr/bin/flock -x /var/lib/sigma-tape/refresh.lock /usr/bin/python3 /usr/local/lib/option-sniper/retain_production_images.py --host --apply
