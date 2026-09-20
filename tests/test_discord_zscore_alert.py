@@ -56,8 +56,8 @@ class AlertCycleTests(unittest.TestCase):
     def test_repository_has_the_requested_default_channel(self):
         self.assertEqual(DEFAULT_DISCORD_CHANNEL_ID, "1544929277009465374")
 
-    def test_default_alert_threshold_is_one_point_two_sigma(self):
-        self.assertEqual(DEFAULT_THRESHOLD, 1.2)
+    def test_default_alert_threshold_is_one_point_five_sigma(self):
+        self.assertEqual(DEFAULT_THRESHOLD, 1.5)
 
     def test_universe_uses_next_market_session(self):
         universe = build_universe({
@@ -107,12 +107,16 @@ class AlertEngineTests(unittest.IsolatedAsyncioTestCase):
             self.universe,
         )
 
+    async def test_old_threshold_no_longer_alerts(self):
+        self.assertEqual(await self.process(price_point("AAA", 1.2, "2026-08-28T12:00:00+00:00")), 0)
+        self.assertEqual(self.sent, [])
+
     async def test_fresh_snapshot_alerts_every_ticker_already_above_threshold(self):
         sent = await self.engine.process_message(
             {
                 "type": "snapshot",
                 "prices": [
-                    price_point("AAA", 1.21, "2026-08-28T12:00:00+00:00"),
+                    price_point("AAA", 1.51, "2026-08-28T12:00:00+00:00"),
                     price_point("BBB", 1.50, "2026-08-28T12:00:01+00:00"),
                 ],
             },
@@ -130,17 +134,17 @@ class AlertEngineTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_crossing_recrossing_and_replayed_prices_alert_only_once(self):
         self.assertEqual(
-            await self.process(price_point("AAA", 1.19, "2026-08-28T12:00:00+00:00")),
+            await self.process(price_point("AAA", 1.49, "2026-08-28T12:00:00+00:00")),
             0,
         )
         self.assertEqual(
-            await self.process(price_point("AAA", 1.20, "2026-08-28T12:00:01+00:00")),
+            await self.process(price_point("AAA", 1.50, "2026-08-28T12:00:01+00:00")),
             1,
         )
-        await self.process(price_point("AAA", 1.20, "2026-08-28T12:00:02+00:00"))
+        await self.process(price_point("AAA", 1.50, "2026-08-28T12:00:02+00:00"))
         await self.process(price_point("AAA", 0.80, "2026-08-28T12:00:03+00:00"))
         self.assertEqual(
-            await self.process(price_point("AAA", 1.30, "2026-08-28T12:00:04+00:00")),
+            await self.process(price_point("AAA", 1.60, "2026-08-28T12:00:04+00:00")),
             0,
         )
         self.assertEqual(len(self.sent), 1)
@@ -176,7 +180,7 @@ class AlertEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.sent, [])
 
     async def test_sqlite_deduplicates_after_worker_restart(self):
-        point = price_point("AAA", 1.2, "2026-08-28T12:00:00+00:00")
+        point = price_point("AAA", 1.5, "2026-08-28T12:00:00+00:00")
         self.assertEqual(await self.process(point), 1)
         self.store.close()
 
@@ -193,7 +197,7 @@ class AlertEngineTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_same_ticker_can_alert_in_the_next_cycle(self):
         self.assertEqual(
-            await self.process(price_point("AAA", 1.2, "2026-08-28T12:00:00+00:00")),
+            await self.process(price_point("AAA", 1.5, "2026-08-28T12:00:00+00:00")),
             1,
         )
         next_universe = AlertUniverse("2026-08-29", self.universe.rows)
@@ -201,7 +205,7 @@ class AlertEngineTests(unittest.IsolatedAsyncioTestCase):
             await self.engine.process_message(
                 {
                     "type": "snapshot",
-                    "prices": [price_point("AAA", 1.3, "2026-08-29T12:00:00+00:00")],
+                    "prices": [price_point("AAA", 1.6, "2026-08-29T12:00:00+00:00")],
                 },
                 next_universe,
             ),
@@ -222,7 +226,7 @@ class AlertEngineTests(unittest.IsolatedAsyncioTestCase):
         await engine.process_message(
             {
                 "type": "delta",
-                "prices": [price_point("AAA", 1.2, "2026-08-28T12:00:00+00:00")],
+                "prices": [price_point("AAA", 1.5, "2026-08-28T12:00:00+00:00")],
             },
             self.universe,
         )
@@ -237,7 +241,7 @@ class AlertEngineTests(unittest.IsolatedAsyncioTestCase):
             await engine.process_message(
                 {
                     "type": "delta",
-                    "prices": [price_point("AAA", 1.3, "2026-08-28T12:00:02+00:00")],
+                    "prices": [price_point("AAA", 1.6, "2026-08-28T12:00:02+00:00")],
                 },
                 self.universe,
             ),

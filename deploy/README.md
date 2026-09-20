@@ -39,7 +39,7 @@ sudoedit /etc/sigma-tape/sigma-tape.env
 It must define `DATABENTO_LIVE_API_KEY`, `DATABENTO_LIVE_OPTIONS_API_KEY`,
 `DATABENTO_HISTORICAL_OPTIONS_API_KEY`, and a
 rotated `DISCORD_BOT_TOKEN`. `DISCORD_CHANNEL_ID` defaults to the production
-alert channel. Production pins `ZSCORE_ALERT_THRESHOLD` to `1.2` in the Compose
+alert channel. Production pins `ZSCORE_ALERT_THRESHOLD` to `1.5` in the Compose
 manifest; change the manifest to deploy a different threshold.
 Do not add any credential value to an image, release archive, or GitHub Actions
 log.

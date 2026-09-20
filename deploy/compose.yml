@@ -42,7 +42,7 @@ services:
       - /etc/sigma-tape/sigma-tape.env
     environment:
       SIGMA_BACKEND_URL: http://backend:8765
-      ZSCORE_ALERT_THRESHOLD: "1.2"
+      ZSCORE_ALERT_THRESHOLD: "1.5"
     depends_on:
       backend:
         condition: service_healthy
