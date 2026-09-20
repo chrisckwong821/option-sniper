@@ -18,7 +18,7 @@
         if (response.status === 304) return false;
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const bundle = await response.json();
-        if (!bundle.snapshot?.rows?.length || !bundle.today?.rows?.length) {
+        if (!Array.isArray(bundle.snapshot?.rows) || !bundle.today?.rows?.length) {
           throw new Error("Invalid dashboard state");
         }
         // Capture versions before the UI enriches the rows with live prices.

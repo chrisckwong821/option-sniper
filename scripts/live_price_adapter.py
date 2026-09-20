@@ -95,7 +95,7 @@ STALE_AFTER_SECONDS = {
 }
 TASKS_KEY = web.AppKey("tasks", list)
 STREAM_SCHEMA_VERSION = "1.2"
-DEFAULT_BROADCAST_INTERVAL = 2.0
+DEFAULT_BROADCAST_INTERVAL = 1.0
 DEFAULT_STATUS_INTERVAL = 15.0
 DEFAULT_SEND_TIMEOUT = 2.0
 
@@ -996,6 +996,10 @@ def create_app(
     state_bundle = with_yesterday_snapshot(
         state_bundle, getattr(args, "yesterday_state_cache", None),
     )
+    from scripts.weekly_options import load_report, weekly_universe
+    weekly_report = load_report(getattr(args, "state_cache", args.cache).parent / "occ-weekly-options.json")
+    if not args.mock or weekly_report["status"] == "available":
+        state_bundle = weekly_universe(state_bundle, weekly_report)
     from scripts.expected_sigma import ExpectedSigma, sigma_plan
     from scripts.iv_reference_refresh import align_serving_expiry, shared_references
     expected_sigma = ExpectedSigma(

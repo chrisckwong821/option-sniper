@@ -39,7 +39,7 @@ sudoedit /etc/sigma-tape/sigma-tape.env
 It must define `DATABENTO_LIVE_API_KEY`, `DATABENTO_LIVE_OPTIONS_API_KEY`,
 `DATABENTO_HISTORICAL_OPTIONS_API_KEY`, and a
 rotated `DISCORD_BOT_TOKEN`. `DISCORD_CHANNEL_ID` defaults to the production
-alert channel. Production pins `ZSCORE_ALERT_THRESHOLD` to `1.2` in the Compose
+alert channel. Production pins `ZSCORE_ALERT_THRESHOLD` to `1.5` in the Compose
 manifest; change the manifest to deploy a different threshold.
 Do not add any credential value to an image, release archive, or GitHub Actions
 log.
@@ -166,3 +166,13 @@ other session dates do not activate the exception. Yesterday's saved display and
 ordinary weekday overnight carry behavior are preserved. Live activation depends
 on receiving a fresh overnight trade; preparing a cache alone does not create
 live prices. The new timer is installed by the deployment script.
+
+After a successful production activation, image retention keeps the active
+`sigma-tape` release and the immediately preceding release for rollback. Older
+`sigma-tape` tags are removed without force. Images referenced by any container
+(including stopped containers), staging images, other applications, and volumes
+are protected. Cleanup failure warns without rolling back a healthy release.
+The policy runs after each successful deployment and daily at 03:00 UTC via
+`option-sniper-image-retention.timer`. The timer shares the deployment/refresh
+lock. `/opt/sigma-tape/rollback-image` records the previous accepted release.
+Missing retention state or images stops cleanup; this is not a global Docker prune.

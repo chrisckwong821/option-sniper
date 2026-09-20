@@ -90,6 +90,34 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message.json()["schema_version"], "1.2")
         await socket.close()
 
+    async def test_weekly_universe_limits_api_price_store_and_iv_roots(self):
+        bundle = build_mock_bundle(sample_plan())
+        selected = bundle["today"]["rows"][0]
+        root = (selected.get("iv_chain") or {}).get("occ_root") or selected["ticker"]
+        report_path = self.args.cache.parent / "occ-weekly-options.json"
+        atomic_write_json(report_path, {"status": "available", "symbols": [root],
+                                       "as_of": "2026-09-09", "expiration": "2026-10-30"})
+        app = create_app(self.args, bundle)
+        self.assertEqual(app[STORE_KEY].symbols, frozenset([selected["ticker"]]))
+        self.assertEqual(set(app[STORE_KEY].iv_tracker.pending_roots), {selected["ticker"]})
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            state = await (await client.get("/api/state")).json()
+            self.assertEqual(state["today"]["valid_iv_coverage"], 1)
+            self.assertEqual([r["ticker"] for r in state["today"]["rows"]], [selected["ticker"]])
+            self.assertTrue(all(r["ticker"] == selected["ticker"] for r in state["snapshot"]["rows"]))
+            # A changed file cannot silently diverge API coverage from active subscriptions.
+            atomic_write_json(report_path, {"status": "unavailable", "symbols": []})
+            state_again = await (await client.get("/api/state")).json()
+            self.assertEqual(state_again["weekly_options"], state["weekly_options"])
+            health = await (await client.get("/api/health")).json()
+            self.assertEqual(health["tracked_symbols"], 1)
+            excluded = bundle["today"]["rows"][1]["ticker"]
+            self.assertFalse(app[STORE_KEY].update_price(excluded, 10, datetime.now(UTC), "TEST"))
+        finally:
+            await client.close()
+
     async def test_early_gainer_refresh_keeps_today_and_alert_universe(self):
         original = await (await self.client.get("/api/state")).json()
         prior_response = await self.client.get("/api/state")
@@ -165,7 +193,13 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_dirty_symbol_delta_is_shared_across_clients(self):
         args = argparse.Namespace(**vars(self.args))
         args.mock = False
-        server = TestServer(create_app(args, build_mock_bundle(sample_plan())))
+        bundle = build_mock_bundle(sample_plan())
+        atomic_write_json(args.cache.parent / "occ-weekly-options.json", {
+            "status": "available", "as_of": "2026-09-09", "expiration": "2026-10-30",
+            "symbols": [(r.get("iv_chain") or {}).get("occ_root") or r["ticker"]
+                        for r in bundle["today"]["rows"]],
+        })
+        server = TestServer(create_app(args, bundle))
         client = TestClient(server)
         await client.start_server()
         try:

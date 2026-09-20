@@ -104,6 +104,33 @@ to the prior release on failure. Databento credentials remain only on EC2.
 
 ## Live data
 
+### OCC weekly-options universe
+
+The server restricts both dashboard lists to OCC weekly-program members before
+building equity subscriptions, option subscriptions, or IV tracking. Valid IV
+Coverage and reliability counts describe the filtered universe. Membership uses
+the OCC option root, with a normalized ticker fallback, independently of the
+selected contract expiry. There is no browser availability filter.
+
+Import the latest public OCC list, then restart the local server to apply it:
+
+```bash
+python -m scripts.weekly_options
+```
+
+The command validates the current (left-hand) list before atomically replacing
+`.cache/sigma-tape/occ-weekly-options.json`. For a custom `--state-cache`, put
+this file in the same directory using `--output`. Membership is fixed for the
+server lifetime so displayed coverage and subscriptions stay consistent. Missing,
+invalid, or nonmatching lists stop non-mock startup rather than subscribing to
+an unrestricted universe. The report date is displayed in the dashboard.
+Production and staging deployment scripts request the latest OCC list before
+activation. If the request fails, they reuse a validated cached OCC list and log
+its original report date. If neither is usable, deployment aborts. A downloaded
+report can also be imported with `--input`. Refresh the installed
+list with the command above and restart to apply membership changes. Stored source snapshots are preserved.
+Mock mode can run without the OCC file.
+
 Set credentials in the environment or an EC2 secret mechanism. Never put them
 in Git or browser JavaScript.
 
@@ -144,13 +171,13 @@ automatically. The existing pre-market refresh and Discord logic are unchanged.
 Open dashboards check for new lists every minute, on reconnect, and when returning
 to the tab. An unchanged Today view retains its existing live rows and filters.
 
-## Discord +1.2 sigma alerts
+## Discord +1.5 sigma alerts
 
 Production includes a small alert worker that consumes the backend WebSocket;
 it does not open a second Databento connection. Its alert cycle starts at 04:00
 America/New_York and covers pre-market, regular, after-hours, and the following
 overnight session. The first fresh snapshot sends every tracked ticker already
-at or above +1.2 expected sigma. Later alerts require an upward crossing, and a
+at or above +1.5 expected sigma. Later alerts require an upward crossing, and a
 SQLite ledger ensures that each ticker is sent at most once per alert cycle.
 
 Set these values only in the host-owned `/etc/sigma-tape/sigma-tape.env` file:
@@ -158,11 +185,11 @@ Set these values only in the host-owned `/etc/sigma-tape/sigma-tape.env` file:
 ```bash
 DISCORD_BOT_TOKEN=ROTATED_TOKEN
 DISCORD_CHANNEL_ID=1544929277009465374
-ZSCORE_ALERT_THRESHOLD=1.2
+ZSCORE_ALERT_THRESHOLD=1.5
 ```
 
 The channel shown above is the built-in default for this deployment. The
-production Compose manifest pins the alert threshold to `1.2`.
+production Compose manifest pins the alert threshold to `1.5`.
 
 The bot needs View Channel and Send Messages permission in the configured
 channel. Never commit its token. If a token is pasted into chat, logs, or source

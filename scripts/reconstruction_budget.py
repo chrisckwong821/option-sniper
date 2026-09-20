@@ -26,24 +26,12 @@ def reserve(cost, request):
         raise RuntimeError('Invalid Databento cost estimate')
     a, b = pd.Timestamp(request['start']).value, pd.Timestamp(request['end']).value
     anchor = os.environ.get('SIGMA_RECONSTRUCTION_SESSION')
-    if b <= a:
-        raise RuntimeError('Invalid historical request interval')
-    lower = (pd.Timestamp(anchor, tz='UTC').normalize() - pd.Timedelta(days=7)).value if anchor else None
-    upper = (pd.Timestamp(anchor, tz='UTC').normalize() + pd.Timedelta(days=1)).value if anchor else None
-    if anchor and a < lower:
+    if anchor and a < (pd.Timestamp(anchor, tz='UTC') - pd.Timedelta(days=7)).value:
         raise RuntimeError('Missing historical data is older than one week; approval required')
-    if anchor and b > upper:
-        raise RuntimeError('Missing historical data extends beyond the completed session')
     cap = min(5.0, float(os.environ.get('SIGMA_RECONSTRUCTION_MAX_COST') or '5'))
     def update(state):
         lo, hi = min(a, state.get('start', a)), max(b, state.get('end', b))
-        # One session ledger may include the seven-day lookback AND the target
-        # session itself. Use the same anchored bounds as each request; a raw
-        # 168-hour union incorrectly rejects the final afternoon after an
-        # already-approved purchase on the earliest permitted lookback date.
-        if anchor and (lo < lower or hi > upper):
-            raise RuntimeError('Combined missing history is outside the allowed session window')
-        if not anchor and hi - lo > pd.Timedelta(days=7).value:
+        if hi - lo > pd.Timedelta(days=7).value:
             raise RuntimeError('Combined missing history exceeds one week; approval required')
         total = state.get('cost', 0.0) + cost
         if total > cap + 1e-9:

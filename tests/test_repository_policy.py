@@ -114,6 +114,12 @@ class RepositoryPolicyTests(unittest.TestCase):
         deploy_script = (ROOT / "deploy" / "ec2-deploy.sh").read_text()
 
         self.assertIn("workflow_run:", workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("github.ref == 'refs/heads/main'", workflow)
+        self.assertRegex(
+            workflow,
+            r"(?s)skip_cache_guard:\s+description:.*?required: true\s+default: false",
+        )
         self.assertIn("workflow_run.conclusion == 'success'", workflow)
         self.assertIn("workflow_run.head_branch == 'main'", workflow)
         self.assertIn("workflow_run.event == 'push'", workflow)
@@ -132,7 +138,9 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.assertIn('"$alerter_ok" == true', guard)
         self.assertIn('deployment_cache.py" restore', guard)
         self.assertIn("option-sniper-discord-token-$revision", deploy_script)
+        self.assertIn('SIGMA_SKIP_CACHE_GUARD="$skip_cache_guard"', deploy_script)
         self.assertIn('sigma-tape-alerter', guard)
+        self.assertIn('SIGMA_SKIP_CACHE_GUARD:-0', guard)
         self.assertIn("up -d --no-build --force-recreate", guard)
 
     def test_yesterday_has_an_independent_post_summary_refresh(self):

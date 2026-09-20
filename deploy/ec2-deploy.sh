@@ -4,6 +4,7 @@ set -Eeuo pipefail
 revision="${1:?revision is required}"
 expected_sha256="${2:?archive checksum is required}"
 discord_token_file="${3:?Discord token file is required}"
+skip_cache_guard="${4:-0}"
 
 if [[ ! "$revision" =~ ^[0-9a-f]{8,40}$ ]]; then
   echo "Invalid revision" >&2
@@ -15,6 +16,10 @@ if [[ ! "$expected_sha256" =~ ^[0-9a-f]{64}$ ]]; then
 fi
 if [[ "$discord_token_file" != "/tmp/option-sniper-discord-token-$revision" ]]; then
   echo "Invalid Discord token path" >&2
+  exit 2
+fi
+if [[ "$skip_cache_guard" != 0 && "$skip_cache_guard" != 1 ]]; then
+  echo "Invalid cache guard setting" >&2
   exit 2
 fi
 
@@ -81,12 +86,22 @@ if [[ ! -f "$release/.release-revision" ]] || \
 fi
 sudo chmod 0755 "$release"
 
+# Exclude daily image retention while building and activating a candidate.
+exec 8>/tmp/option-sniper-image-retention.lock
+flock -x 8
 cd "$release"
 sudo env SIGMA_TAPE_VERSION="$revision" \
   docker compose -f deploy/compose.yml build
 
+# Refresh the OCC list, falling back to a validated cached list on request failure before restarting.
+# Failure leaves the currently serving release untouched.
+sudo env SIGMA_TAPE_VERSION="$revision" \
+  docker compose -f deploy/compose.yml run --rm --no-deps \
+  --entrypoint python backend -m scripts.weekly_options </dev/null
+
 # Fail-closed semantic checks, including the alerter, and code/cache rollback.
-sudo bash "$release/deploy/guarded-activate.sh" production "$revision"
+sudo env SIGMA_SKIP_CACHE_GUARD="$skip_cache_guard" \
+  bash "$release/deploy/guarded-activate.sh" production "$revision"
 sudo docker inspect --format \
   'deployed image={{.Config.Image}} status={{.State.Status}} health={{.State.Health.Status}} restarts={{.RestartCount}}' \
   sigma-tape

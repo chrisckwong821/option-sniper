@@ -8,6 +8,7 @@ const state = {
   search: "",
   sector: "all",
   reliability: "all",
+  weeklyOptions: null,
   threshold: "all",
   viewSettings: {
     yesterday: { sortKey: "original_rank", sortDirection: "asc" },
@@ -56,6 +57,7 @@ const elements = {
   search: document.querySelector("#search-input"),
   sector: document.querySelector("#sector-filter"),
   reliability: document.querySelector("#reliability-filter"),
+  weeklyNote: document.querySelector("#weekly-options-note"),
   sessionDate: document.querySelector("#session-date"),
   lastUpdate: document.querySelector("#last-update"),
   statusBadge: document.querySelector("#status-badge"),
@@ -632,6 +634,9 @@ function render() {
   elements.topTicker.textContent = top?.ticker || "No matching movers";
   elements.outsideCount.textContent = outsideCount;
   elements.coverageCount.textContent = payload.rows.length;
+  elements.weeklyNote.textContent = state.weeklyOptions?.enforced
+    ? `Weekly-options universe · OCC list as of ${formatDate(state.weeklyOptions.as_of)} · ${state.weeklyOptions.coverage.today.retained} of ${state.weeklyOptions.coverage.today.input} stocks eligible`
+    : "";
   elements.reliabilityMix.textContent = `${mix.high || 0} high / ${mix.medium || 0} medium / ${mix.low || 0} low`;
   elements.sessionDate.textContent = formatDate(state.live.dataDate || payload.data_date);
   elements.lastUpdate.textContent = formatUpdate(liveTimestamp || payload.last_update_utc);
@@ -899,10 +904,9 @@ function connectLivePrices() {
   });
   socket.addEventListener("close", () => {
     if (state.live.socket !== socket) return;
-    state.live.socket = null;
     state.live.connected = false;
     setConnectionState(state.live.pricesReceived ? "stale" : "snapshot", state.live.pricesReceived ? "Stale prices" : "Snapshot");
-    if (document.visibilityState === "visible") scheduleReconnect();
+    scheduleReconnect();
   });
   socket.addEventListener("error", () => socket.close());
 }
@@ -975,10 +979,6 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     refreshDashboardState().catch(() => {});
     if (!state.live.connected) connectLivePrices();
-  } else {
-    window.clearTimeout(state.live.retryTimer);
-    state.live.retryTimer = null;
-    state.live.socket?.close(1000, "Page hidden");
   }
 });
 
@@ -1057,6 +1057,7 @@ function initializeRows(payload, view) {
 
 function applyDashboardState(bundle, changed) {
   const initial = !state.payload;
+  state.weeklyOptions = bundle.weekly_options || null;
   state.cache = bundle.cache || null;
   state.refreshPlan = bundle.refresh_plan;
   if (changed.yesterday) {

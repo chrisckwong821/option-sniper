@@ -1,11 +1,14 @@
 import copy
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
-from scripts.deployment_cache import backup, restore
+from types import SimpleNamespace
+from unittest.mock import patch
+from scripts.deployment_cache import backup, prune, restore
 from scripts.deployment_health import check
 
 
@@ -86,24 +89,24 @@ class HealthTests(unittest.TestCase):
         self.assertTrue(check(payload, NOW))
 
     def test_no_freshness_requirement_on_holidays_or_after_early_close(self):
-        for now in [datetime(2026, 9, 12, 15, tzinfo=timezone.utc),
-                    datetime(2026, 9, 7, 14, tzinfo=timezone.utc),
+        for now in [datetime(2026, 9, 7, 14, tzinfo=timezone.utc),
                     datetime(2026, 11, 27, 19, tzinfo=timezone.utc)]:
             payload = healthy(now)
             payload['feeds'] = {}
             payload['iv_expansions'] = []
-            payload['iv_expansion']['calculated_symbols'] = 0
             self.assertEqual(check(payload, now), [])
 
     def test_weekend_s3_consumer_uses_friday_as_latest_closed_session(self):
-        now = datetime(2026, 9, 12, 15, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 20, 5, tzinfo=timezone.utc)
         payload = healthy(now)
-        payload['dashboard_state']['data_date'] = '2026-09-11'
-        payload['iv_expansion'].update(reference_date='2026-09-11', calculated_symbols=0)
+        payload['dashboard_state']['data_date'] = '2026-09-18'
+        payload['iv_expansion'].update(reference_date='2026-09-18', calculated_symbols=0)
         payload['iv_expansions'] = []
         payload['calibration'].update(
-            active_date='2026-09-10', cache_mode='s3_only', is_stale=True)
+            active_date='2026-09-17', cache_mode='s3_only', is_stale=True)
         self.assertEqual(check(payload, now), [])
+        payload['calibration']['active_date'] = '2026-09-16'
+        self.assertIn('Compatible sigma calibration is not loaded for the dashboard date', check(payload, now))
 
     def test_reference_date_not_yesterday_panel_date(self):
         payload = healthy()
@@ -112,6 +115,34 @@ class HealthTests(unittest.TestCase):
 
 
 class CacheRollbackTests(unittest.TestCase):
+    def test_prune_removes_abandoned_then_oldest_snapshot_until_space_is_safe(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'cache'
+            snapshots = Path(directory) / 'snapshots'
+            root.mkdir()
+            snapshots.mkdir()
+            (root / 'dashboard-state.json').write_text('current')
+            old = snapshots / 'old'
+            newest = snapshots / 'newest'
+            abandoned = snapshots / 'abandoned'
+            for path in (old, newest, abandoned):
+                path.mkdir()
+            (old / 'manifest.json').write_text('{}')
+            (newest / 'manifest.json').write_text('{}')
+            os.utime(old, (1, 1))
+            os.utime(newest, (2, 2))
+
+            def available(_):
+                return SimpleNamespace(free=0 if old.exists() else 2 * 1024**3)
+
+            with patch('scripts.deployment_cache.shutil.disk_usage', side_effect=available):
+                removed = prune(root, snapshots)
+
+            self.assertEqual(removed, ['abandoned', 'old'])
+            self.assertFalse(old.exists())
+            self.assertFalse(abandoned.exists())
+            self.assertTrue(newest.exists())
+
     def test_restore_old_cache_without_reverting_new_discord_alerts(self):
         with tempfile.TemporaryDirectory() as directory:
             root, saved = Path(directory) / 'cache', Path(directory) / 'snapshot'
@@ -167,10 +198,10 @@ class CacheRollbackTests(unittest.TestCase):
 
 
 class ActivationWiringTests(unittest.TestCase):
-    def test_production_alert_threshold_is_pinned_to_one_point_two_sigma(self):
+    def test_production_alert_threshold_is_pinned_to_one_point_five_sigma(self):
         root = Path(__file__).resolve().parents[1]
         compose = (root / 'deploy' / 'compose.yml').read_text()
-        self.assertIn('ZSCORE_ALERT_THRESHOLD: "1.2"', compose)
+        self.assertIn('ZSCORE_ALERT_THRESHOLD: "1.5"', compose)
 
     def test_both_lanes_use_same_guard(self):
         root = Path(__file__).resolve().parents[1]

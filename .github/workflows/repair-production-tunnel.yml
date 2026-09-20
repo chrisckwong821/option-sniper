@@ -1,0 +1,90 @@
+name: Repair production tunnel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: option-sniper-production
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.EC2_HOST }}
+      DEPLOY_USER: ${{ secrets.EC2_USER }}
+    steps:
+      - name: Configure trusted SSH access
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+        run: |
+          key_path="$RUNNER_TEMP/option-sniper-ssh-key"
+          known_hosts="$RUNNER_TEMP/option-sniper-known-hosts"
+          install -m 0700 -d "$HOME/.ssh"
+          printf '%s\n' "$EC2_SSH_KEY" > "$key_path"
+          printf '%s\n' "$EC2_KNOWN_HOSTS" > "$known_hosts"
+          chmod 0600 "$key_path" "$known_hosts"
+          ssh-keygen -y -f "$key_path" >/dev/null
+
+      - name: Restart tunnel and verify local application
+        run: |
+          key_path="$RUNNER_TEMP/option-sniper-ssh-key"
+          known_hosts="$RUNNER_TEMP/option-sniper-known-hosts"
+          ssh_options=(
+            -i "$key_path"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o "UserKnownHostsFile=$known_hosts"
+            -o ConnectTimeout=15
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=4
+          )
+          ssh "${ssh_options[@]}" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          echo "cloudflared_before=$(sudo systemctl is-active cloudflared || true)"
+          echo "cloudflared_enabled=$(sudo systemctl is-enabled cloudflared || true)"
+          curl -fsS --max-time 10 http://127.0.0.1:8765/api/health >/dev/null
+          sudo install -d -o root -g root -m 0755 /etc/systemd/system/cloudflared.service.d
+          printf '%s\n' \
+            '[Unit]' \
+            'StartLimitIntervalSec=0' \
+            '[Service]' \
+            'Restart=always' \
+            'RestartSec=5s' \
+            | sudo tee /etc/systemd/system/cloudflared.service.d/restart.conf >/dev/null
+          sudo systemctl daemon-reload
+          sudo systemctl enable cloudflared >/dev/null
+          sudo systemctl reset-failed cloudflared || true
+          sudo systemctl restart cloudflared
+          for _ in $(seq 1 30); do
+            if sudo systemctl is-active --quiet cloudflared; then
+              echo 'cloudflared_after=active'
+              exit 0
+            fi
+            sleep 1
+          done
+          echo 'cloudflared failed to become active' >&2
+          exit 1
+          REMOTE
+
+      - name: Verify public route
+        run: |
+          for _ in $(seq 1 30); do
+            code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
+              https://optionsniper.xyz/api/health || true)
+            if [[ "$code" == 200 ]]; then
+              echo 'public_health=200'
+              exit 0
+            fi
+            echo "public_health=$code; retrying"
+            sleep 2
+          done
+          echo 'Public tunnel did not recover' >&2
+          exit 1
