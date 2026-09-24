@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 from unittest.mock import Mock, patch
-from scripts.live_price_adapter import DatabentoOptionFeed, option_symbol_from_mapping
+from scripts.live_price_adapter import DatabentoOptionFeed, option_symbol_from_mapping, parse_args
 from scripts.option_contract_catalog import LiveOptionCatalog
 
 
@@ -96,3 +96,11 @@ class IndependentOptionStreamsTests(unittest.TestCase):
         self.assertEqual([r['schema'] for r in requests], ['definition'])
         self.assertEqual(requests[0]['start'], 0)
         self.assertEqual(feed.status_name, 'OPRA.PILLAR.definitions')
+
+
+class StartupReplayTests(unittest.TestCase):
+    def test_current_quotes_by_default_and_replay_is_opt_in(self):
+        with patch('sys.argv', ['adapter']):
+            self.assertEqual(parse_args().replay_minutes, 0)
+        with patch('sys.argv', ['adapter', '--replay-minutes', '60']):
+            self.assertEqual(parse_args().replay_minutes, 60)

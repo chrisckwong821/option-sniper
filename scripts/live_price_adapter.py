@@ -1428,7 +1428,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-definition-cost", type=float, default=1.0)
     parser.add_argument("--day-dataset", default="EQUS.MINI")
     parser.add_argument("--overnight-dataset", default="OCEA.MEMOIR")
-    parser.add_argument("--replay-minutes", type=int, default=60)
+    parser.add_argument("--replay-minutes", type=int, default=0,
+                        help="Optional equity replay; default to current quotes so IV is not blocked by replay.")
     parser.add_argument("--option-replay-minutes", type=int, default=0)
     parser.add_argument("--broadcast-interval", type=float, default=DEFAULT_BROADCAST_INTERVAL)
     parser.add_argument("--status-interval", type=float, default=DEFAULT_STATUS_INTERVAL)
