@@ -26,6 +26,21 @@ def healthy(now=NOW):
 
 
 class HealthTests(unittest.TestCase):
+    def test_afterhours_retains_only_exact_active_s3_cycle(self):
+        now = datetime(2026, 9, 24, 23, 30, tzinfo=timezone.utc)
+        payload = healthy(now)
+        payload['dashboard_state'].update(status='stale', data_date='2026-09-23')
+        payload['iv_expansion'].update(reference_date='2026-09-23', calculated_symbols=0)
+        payload['iv_expansions'] = []
+        payload['calibration'].update(active_date='2026-09-23', cache_mode='s3_only')
+        self.assertEqual(check(payload, now), [])
+        older = copy.deepcopy(payload)
+        older['dashboard_state']['data_date'] = '2026-09-22'
+        self.assertIn('Dashboard cache is not fresh', check(older, now))
+        premarket = datetime(2026, 9, 25, 8, 0, tzinfo=timezone.utc)
+        payload['server_time'] = premarket.isoformat()
+        self.assertIn('Dashboard cache is not fresh', check(payload, premarket))
+
     def test_premarket_allows_previous_calibration_without_live_option_observations(self):
         now = datetime(2026, 9, 9, 8, 30, tzinfo=timezone.utc)
         payload = healthy(now)

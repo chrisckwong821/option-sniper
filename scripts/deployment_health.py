@@ -31,10 +31,19 @@ def check(payload, now=None):
         errors.append('Health response timestamp is missing or stale')
     state = payload.get('dashboard_state', {})
     calibration = payload.get('calibration', {})
-    if state.get('status') != 'fresh':
-        errors.append('Dashboard cache is not fresh')
     iv = payload.get('iv_expansion', {})
     reference_date = iv.get('reference_date') or state.get('data_date')
+    rollover_cache = False
+    if state.get('status') == 'stale' and not regular and not premarket:
+        # The app activates a new IV cycle at 04:00 ET. A restart after close
+        # can label the still-active S3 dashboard stale against the next cycle.
+        from scripts.expected_sigma import sigma_plan
+        active_reference = sigma_plan(now)['iv_session']
+        rollover_cache = (calibration.get('cache_mode') == 's3_only'
+                          and state.get('data_date') == reference_date == active_reference
+                          and calibration.get('active_date') == active_reference)
+    if state.get('status') != 'fresh' and not rollover_cache:
+        errors.append('Dashboard cache is not fresh')
     compatible = calibration.get('active_date') == reference_date
     # S3-only consumers may explicitly retain the immediately prior calibration
     # while the publisher repairs it. Never accept older/unversioned statistics;
