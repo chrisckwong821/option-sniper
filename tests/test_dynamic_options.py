@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from scripts.live_price_adapter import DatabentoOptionFeed, option_symbol_from_mapping
 from scripts.option_contract_catalog import LiveOptionCatalog
 
@@ -75,3 +75,24 @@ class OptionMappingTests(unittest.TestCase):
             with self.subTest(input=input_symbol, output=output):
                 self.assertIsNone(option_symbol_from_mapping(Mock(
                     stype_in_symbol=input_symbol, stype_out_symbol=output)))
+
+
+class IndependentOptionStreamsTests(unittest.TestCase):
+    def test_quote_connection_does_not_replay_definitions(self):
+        feed = DatabentoOptionFeed('test', ['AAPL  261002C00340000'], Mock(), 0, asyncio.Event())
+        with patch('scripts.live_price_adapter.db.Live') as live:
+            feed.connect()
+        requests = [call.kwargs for call in live.return_value.subscribe.call_args_list]
+        self.assertEqual([r['schema'] for r in requests], ['cbbo-1s'])
+        self.assertNotIn('start', requests[0])
+        self.assertEqual(feed.status_name, 'OPRA.PILLAR')
+
+    def test_discovery_connection_has_separate_status_and_no_quotes(self):
+        feed = DatabentoOptionFeed('test', [], Mock(), 0, asyncio.Event(),
+                                   definition_parents=['AAPL.OPT'])
+        with patch('scripts.live_price_adapter.db.Live') as live:
+            feed.connect()
+        requests = [call.kwargs for call in live.return_value.subscribe.call_args_list]
+        self.assertEqual([r['schema'] for r in requests], ['definition'])
+        self.assertEqual(requests[0]['start'], 0)
+        self.assertEqual(feed.status_name, 'OPRA.PILLAR.definitions')

@@ -701,6 +701,7 @@ class DatabentoOptionFeed:
         self.client: db.Live | None = None
         self.definition_parents = definition_parents or []
         self.definition_callback = definition_callback
+        self.status_name = "OPRA.PILLAR.definitions" if definition_parents and not symbols else "OPRA.PILLAR"
         self.last_plan = {}
 
     def _subscribe(
@@ -810,7 +811,7 @@ class DatabentoOptionFeed:
 
     async def run(self) -> None:
         backoff = 1
-        dataset = "OPRA.PILLAR"
+        dataset = self.status_name
         while not self.stop.is_set():
             mappings: dict[int, str] = {}
             self.store.set_feed_status(dataset, "connecting")
@@ -1340,8 +1341,6 @@ def create_app(
                         replay_minutes=getattr(args, "option_replay_minutes", 0),
                         stop=stop,
                         symbol_provider=planned_option_symbols,
-                        definition_parents=sorted({f"{row['ticker']}.OPT" for row in universe["rows"]}),
-                        definition_callback=receive_definition,
                     )
                     option_runtime["feed"] = option_feed
                     await option_feed.run()
@@ -1349,6 +1348,17 @@ def create_app(
                 tasks.append(asyncio.create_task(
                     run_option_feed(),
                     name="feed-OPRA.PILLAR",
+                ))
+                # Definition replay can delay quotes until it catches up. Keep
+                # discovery on its own connection, unaffected by strike rotation.
+                definition_feed = DatabentoOptionFeed(
+                    api_key=live_option_api_key, symbols=[], store=store,
+                    replay_minutes=0, stop=stop,
+                    definition_parents=sorted({f"{row['ticker']}.OPT" for row in universe["rows"]}),
+                    definition_callback=receive_definition,
+                )
+                tasks.append(asyncio.create_task(
+                    definition_feed.run(), name="feed-OPRA.PILLAR.definitions",
                 ))
             elif not live_option_api_key:
                 store.set_feed_status(
