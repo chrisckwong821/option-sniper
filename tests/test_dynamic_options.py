@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 from unittest.mock import Mock
-from scripts.live_price_adapter import DatabentoOptionFeed
+from scripts.live_price_adapter import DatabentoOptionFeed, option_symbol_from_mapping
 from scripts.option_contract_catalog import LiveOptionCatalog
 
 
@@ -53,3 +53,25 @@ class ReplanTests(unittest.IsolatedAsyncioTestCase):
         await feed.refresh_subscriptions()
         self.assertEqual(feed.symbols, {'keep'})
         feed.client.terminate.assert_not_called()
+
+
+class OptionMappingTests(unittest.TestCase):
+    def test_numeric_output_resolves_input_occ_symbol(self):
+        symbol = 'AAPL  261002C00340000'
+        record = Mock(stype_in_symbol=symbol, stype_out_symbol='123456')
+        self.assertEqual(option_symbol_from_mapping(record), symbol)
+
+    def test_parent_input_resolves_output_occ_symbol(self):
+        symbol = 'TSEM  261002P00200000'
+        record = Mock(stype_in_symbol='TSEM.OPT', stype_out_symbol=symbol)
+        self.assertEqual(option_symbol_from_mapping(record), symbol)
+
+    def test_empty_output_and_null_padding(self):
+        record = Mock(stype_in_symbol='AAPL  261002C00340000\x00', stype_out_symbol='\x00')
+        self.assertEqual(option_symbol_from_mapping(record), 'AAPL  261002C00340000')
+
+    def test_invalid_mapping_is_not_used_as_contract(self):
+        for input_symbol, output in [('AAPL.OPT', '123456'), ('', ''), ('123456', '123456')]:
+            with self.subTest(input=input_symbol, output=output):
+                self.assertIsNone(option_symbol_from_mapping(Mock(
+                    stype_in_symbol=input_symbol, stype_out_symbol=output)))

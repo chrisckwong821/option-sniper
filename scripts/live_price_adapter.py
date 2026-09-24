@@ -22,9 +22,9 @@ import databento as db
 from aiohttp import WSMsgType, web
 
 try:
-    from .iv_expansion import IvExpansionTracker, option_contract_symbols
+    from .iv_expansion import IvExpansionTracker, option_contract_symbols, parse_occ_symbol
 except ImportError:
-    from iv_expansion import IvExpansionTracker, option_contract_symbols
+    from iv_expansion import IvExpansionTracker, option_contract_symbols, parse_occ_symbol
 
 try:
     from .option_contract_catalog import (
@@ -668,6 +668,14 @@ class DatabentoFeed:
                 backoff = min(30, backoff * 2)
 
 
+def option_symbol_from_mapping(record) -> str | None:
+    """Resolve raw-symbol and parent mappings without treating IDs as OCC symbols."""
+    output = str(getattr(record, "stype_out_symbol", "") or "").rstrip("\x00")
+    input_symbol = str(getattr(record, "stype_in_symbol", "") or "").rstrip("\x00")
+    symbol = input_symbol if not output or output.isdigit() else output
+    return symbol if parse_occ_symbol(symbol) is not None else None
+
+
 class DatabentoOptionFeed:
     def __init__(
         self,
@@ -832,9 +840,7 @@ class DatabentoOptionFeed:
                             if self.definition_callback is not None:
                                 self.definition_callback(record)
                         elif isinstance(record, db.SymbolMappingMsg):
-                            mapped_symbol = getattr(record, "stype_out_symbol", None)
-                            input_symbol = getattr(record, "stype_in_symbol", None)
-                            raw_symbol = str(mapped_symbol or input_symbol or "").rstrip("\x00")
+                            raw_symbol = option_symbol_from_mapping(record)
                             if not raw_symbol:
                                 continue
                             mappings[record.instrument_id] = raw_symbol
