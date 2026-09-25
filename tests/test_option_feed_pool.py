@@ -14,7 +14,7 @@ class PartitionTests(unittest.TestCase):
         symbols = [symbol(f'T{i}', k) for i in range(400) for k in range(14)]
         bins, roots = partition_symbols(symbols)
         self.assertEqual(set.union(*bins), set(symbols))
-        self.assertTrue(all(len(b) <= 1000 for b in bins))
+        self.assertTrue(all(len(b) <= 1500 for b in bins))
         changed = symbols[1:] + [symbol('T0', 99)]
         new_bins, new_roots = partition_symbols(changed, roots)
         self.assertEqual(roots, new_roots)
@@ -22,7 +22,7 @@ class PartitionTests(unittest.TestCase):
 
     def test_capacity_failure_is_explicit(self):
         with self.assertRaisesRegex(ValueError, 'capacity'):
-            partition_symbols([symbol('A', k) for k in range(1001)])
+            partition_symbols([symbol('A', k) for k in range(1501)])
 
 
 class PoolTests(unittest.IsolatedAsyncioTestCase):

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from time import monotonic
 
 
-def partition_symbols(symbols, previous=None, shard_count=6, capacity=1000):
+def partition_symbols(symbols, previous=None, shard_count=4, capacity=1500):
     """Keep a ticker's calls/puts together and preserve its connection assignment."""
     groups = {}
     for symbol in sorted(set(symbols)):
@@ -84,7 +84,7 @@ class QuoteSink:
 
 class OptionFeedPool:
     def __init__(self, api_key, symbols, store, stop, symbol_provider, feed_factory,
-                 shard_count=6, capacity=1000, refresh_seconds=60,
+                 shard_count=4, capacity=1500, refresh_seconds=60,
                  replacement_timeout=120, retirement_seconds=600, start_spacing=1.1):
         self.api_key, self.store, self.stop = api_key, store, stop
         self.symbol_provider, self.feed_factory = symbol_provider, feed_factory
