@@ -862,7 +862,8 @@ class DatabentoOptionFeed:
                             )
                             self.store.touch_feed(dataset)
                         elif isinstance(record, db.SystemMsg):
-                            self.store.touch_feed(dataset)
+                            if self.definition_parents:
+                                self.store.touch_feed(dataset)
                         elif isinstance(record, db.ErrorMsg):
                             self.store.set_feed_status(
                                 dataset,
@@ -1155,6 +1156,8 @@ def create_app(
 
     async def health_handler(_: web.Request) -> web.Response:
         payload = store.payload("health")
+        if option_runtime["feed"] is not None:
+            payload["feeds"] = {**payload["feeds"], "OPRA.PILLAR": option_runtime["feed"].feed_health()}
         payload["tracked_symbols"] = len(symbols)
         payload["fixed_list_symbols"] = len(snapshot["rows"])
         payload["iv_universe_symbols"] = len(universe["rows"])
@@ -1168,11 +1171,13 @@ def create_app(
                 else option_symbols
             ),
             "calculated_symbols": len(iv_tracker.results),
+            "fresh_calculated_symbols": sum(row.get("status") == "live" for row in payload.get("iv_expansions", [])),
             "calculation_interval_seconds": iv_tracker.calculation_interval_seconds,
             "pending_calculations": len(iv_tracker.pending_calculations),
             "method": "moneyness-matched-black76-v1",
             "subscription_refresh_seconds": 60,
             "subscription_plan": option_runtime["feed"].last_plan if option_runtime["feed"] else {},
+            "connections": option_runtime["feed"].health() if option_runtime["feed"] else {},
             "contract_catalog": {
                 "source": (
                     option_runtime["catalog"].get("source", "definition")
@@ -1334,13 +1339,15 @@ def create_app(
                             "No same-expiry option contracts are available",
                         )
                         return
-                    option_feed = DatabentoOptionFeed(
+                    from scripts.option_feed_pool import OptionFeedPool
+
+                    option_feed = OptionFeedPool(
                         api_key=live_option_api_key,
                         symbols=symbols_for_feed,
                         store=store,
-                        replay_minutes=getattr(args, "option_replay_minutes", 0),
                         stop=stop,
                         symbol_provider=planned_option_symbols,
+                        feed_factory=DatabentoOptionFeed,
                     )
                     option_runtime["feed"] = option_feed
                     await option_feed.run()
