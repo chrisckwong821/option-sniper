@@ -644,7 +644,7 @@ class DatabentoFeed:
                         self.store.set_feed_status(
                             self.config.dataset,
                             "degraded",
-                            str(record.msg),
+                            str(record.err),
                         )
             except asyncio.CancelledError:
                 raise
@@ -868,7 +868,7 @@ class DatabentoOptionFeed:
                             self.store.set_feed_status(
                                 dataset,
                                 "degraded",
-                                str(record.msg),
+                                str(record.err),
                             )
                 finally:
                     planner.cancel()

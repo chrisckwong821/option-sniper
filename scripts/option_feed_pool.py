@@ -39,12 +39,16 @@ class QuoteSink:
         self.last_event_at = None
         self.status = 'connecting'
         self.error = None
+        self.provider_error_count = 0
+        self.last_provider_error = None
         self.started = monotonic()
 
     def set_feed_status(self, dataset, state, detail=''):
         self.status = state
         if state in ('degraded', 'retrying'):
             self.error = detail
+            self.provider_error_count += 1
+            self.last_provider_error = detail
 
     def touch_feed(self, dataset):
         # Quote updates below own freshness. Protocol messages are not quotes.
@@ -74,7 +78,8 @@ class QuoteSink:
         state = 'stale' if age is not None and age > 180 else self.status
         return dict(state=state, quote_count=self.quote_count,
                     last_quote_at=self.last_quote_at, last_quote_event_at=self.last_event_at,
-                    error=self.error)
+                    error=self.error, provider_error_count=self.provider_error_count,
+                    last_provider_error=self.last_provider_error)
 
 
 class OptionFeedPool:

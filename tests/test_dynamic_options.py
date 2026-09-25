@@ -104,3 +104,29 @@ class StartupReplayTests(unittest.TestCase):
             self.assertEqual(parse_args().replay_minutes, 0)
         with patch('sys.argv', ['adapter', '--replay-minutes', '60']):
             self.assertEqual(parse_args().replay_minutes, 60)
+
+
+class ProviderErrorRecordTests(unittest.IsolatedAsyncioTestCase):
+    async def test_nonfatal_error_uses_sdk_err_field_without_reconnecting(self):
+        import databento as db
+        from unittest.mock import AsyncMock
+        stop = asyncio.Event()
+        record = db.ErrorMsg(ts_event=0, err='slow reader notice',
+                             code=db.ErrorCode.SKIPPED_RECORDS_AFTER_SLOW_READING, is_last=True)
+        class Client:
+            def __aiter__(self):
+                async def records():
+                    yield record
+                    yield record
+                    stop.set()
+                return records()
+            def stop(self):
+                pass
+        store = Mock()
+        feed = DatabentoOptionFeed('test', ['AAPL  261002C00340000'], store, 0, stop)
+        feed.connect_without_blocking_server = AsyncMock(return_value=Client())
+        await feed.run()
+        statuses = [call.args for call in store.set_feed_status.call_args_list]
+        self.assertEqual(sum(s[1] == 'degraded' and s[2] == 'slow reader notice' for s in statuses), 2)
+        self.assertFalse(any(s[1] == 'retrying' for s in statuses))
+        feed.connect_without_blocking_server.assert_awaited_once()
