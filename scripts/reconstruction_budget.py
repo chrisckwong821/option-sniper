@@ -12,6 +12,10 @@ _LOCK = threading.Lock()
 _MEMORY = {'cost': 0.0}
 
 
+class HistoricalLookbackBlocked(RuntimeError):
+    """An uncached request predates the permitted reconstruction window."""
+
+
 def start_run(root, completed_session):
     path = Path(root).resolve() / 'reconstruction-runs' / (uuid.uuid4().hex + '.json')
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -31,7 +35,7 @@ def reserve(cost, request):
     lower = (pd.Timestamp(anchor, tz='UTC').normalize() - pd.Timedelta(days=7)).value if anchor else None
     upper = (pd.Timestamp(anchor, tz='UTC').normalize() + pd.Timedelta(days=1)).value if anchor else None
     if anchor and a < lower:
-        raise RuntimeError('Missing historical data is older than one week; approval required')
+        raise HistoricalLookbackBlocked('Missing historical data is older than one week; approval required')
     if anchor and b > upper:
         raise RuntimeError('Missing historical data extends beyond the completed session')
     cap = min(5.0, float(os.environ.get('SIGMA_RECONSTRUCTION_MAX_COST') or '5'))

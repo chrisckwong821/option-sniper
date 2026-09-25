@@ -33,6 +33,7 @@ import numpy as np
 import pandas as pd
 
 try:
+    from .reconstruction_budget import HistoricalLookbackBlocked
     from .databento_config import resolve_historical_api_keys
     from .nasdaq_universe_movers import (
         estimate_option_iv,
@@ -44,6 +45,7 @@ try:
         plan_option_subscriptions,
     )
 except ImportError:  # Support direct script execution.
+    from reconstruction_budget import HistoricalLookbackBlocked
     from databento_config import resolve_historical_api_keys
     from nasdaq_universe_movers import (
         estimate_option_iv,
@@ -1284,94 +1286,122 @@ def build_baselines(
         # cycle.  If quote fallback crosses before the cycle catalogue date,
         # use a matching earlier definition snapshot for correctness.
         definition_session = min(reference, cycle_catalog_session)
-        contracts = _contracts_for_session(
-            option_client,
-            ledger,
-            candidate_rows,
-            definition_session,
-            observation_session=observation_session,
-            available_at=reference,
-            contract_cache=(
-                contract_cache
-                if definition_session == cycle_catalog_session
-                else None
-            ),
-        )
-        expiry_by_ticker: dict[str, tuple[date, str]] = {}
-        selected_catalog: dict[str, Any] = {"contracts": {}}
-        for ticker in remaining:
-            selection = select_listed_expiry(
-                (contracts.get(ticker) or {}).keys(),
-                reference_session=reference,
+        try:
+            contracts = _contracts_for_session(
+                option_client,
+                ledger,
+                candidate_rows,
+                definition_session,
                 observation_session=observation_session,
+                available_at=reference,
+                contract_cache=(
+                    contract_cache
+                    if definition_session == cycle_catalog_session
+                    else None
+                ),
             )
-            if selection is None:
-                continue
-            expiry_by_ticker[ticker] = selection
-            selected_catalog["contracts"][ticker] = contracts[ticker][selection[0]]
-        print(
-            f"baseline observation={observation_session} reference={reference} "
-            f"target_expiry={option_expiry_for_observation(observation_session)} "
-            f"remaining={len(remaining)} eligible_contracts={len(expiry_by_ticker)} "
-            f"fallback_sessions={fallback_sessions}", flush=True,
-        )
-        if not expiry_by_ticker:
-            reference = XNYS.previous_session(pd.Timestamp(reference)).date()
-            continue
-        # A fallback only needs prices for unresolved, eligible symbols. Asking
-        # for the entire universe can purchase unrelated old history or trip a
-        # budget guard before otherwise valid baselines can be used.
-        required_spot_rows = [row for row in (spot_rows if spot_rows is not None else candidate_rows)
-                              if normalize_symbol(str(row['ticker'])) in expiry_by_ticker]
-        spot_frame = _spot_frame(spot_client, ledger, required_spot_rows, reference)
-        spots = latest_spots(spot_frame, expiry_by_ticker, close_mark)
-        baseline_symbols, selected = select_baseline_symbols(selected_catalog, spots)
-        option_frame = _option_frames(
-            option_client,
-            ledger,
-            baseline_symbols,
-            close_mark - timedelta(minutes=DEFAULT_QUOTE_LOOKBACK_MINUTES),
-            close_mark + timedelta(minutes=1, seconds=1),
-            option_symbol_chunk_size,
-            "baseline_options",
-            download_workers,
-        )
-        quote_window = frame_window(
-            option_frame,
-            close_mark - timedelta(minutes=DEFAULT_QUOTE_LOOKBACK_MINUTES),
-            close_mark + timedelta(minutes=1, seconds=1),
-        )
-        pairs_by_ticker = prepare_snapshot_pairs(
-            quote_window,
-            candidate_rows,
-            {ticker: expiry for ticker, (expiry, _) in expiry_by_ticker.items()},
-        )
-        for ticker in list(remaining):
-            spot = spots.get(ticker)
-            if spot is None or ticker not in selected or ticker not in expiry_by_ticker:
-                continue
-            expiry, expiry_status = expiry_by_ticker[ticker]
-            estimate = estimate_snapshot_from_pairs(
-                ticker,
-                spot,
-                pairs_by_ticker.get(ticker, []),
-                expiry,
-                close_mark,
+            expiry_by_ticker: dict[str, tuple[date, str]] = {}
+            selected_catalog: dict[str, Any] = {"contracts": {}}
+            for ticker in remaining:
+                selection = select_listed_expiry(
+                    (contracts.get(ticker) or {}).keys(),
+                    reference_session=reference,
+                    observation_session=observation_session,
+                )
+                if selection is None:
+                    continue
+                expiry_by_ticker[ticker] = selection
+                selected_catalog["contracts"][ticker] = contracts[ticker][selection[0]]
+            print(
+                f"baseline observation={observation_session} reference={reference} "
+                f"target_expiry={option_expiry_for_observation(observation_session)} "
+                f"remaining={len(remaining)} eligible_contracts={len(expiry_by_ticker)} "
+                f"fallback_sessions={fallback_sessions}", flush=True,
             )
-            if estimate is None:
+            if not expiry_by_ticker:
+                reference = XNYS.previous_session(pd.Timestamp(reference)).date()
                 continue
-            baselines[ticker] = Baseline(
-                ticker=ticker,
-                requested_reference_session=requested_reference,
-                reference_session=reference,
-                fallback_sessions=fallback_sessions,
-                expiry=expiry,
-                expiry_status=expiry_status,
-                spot=spot,
-                estimate=estimate,
-                contracts=list((selected_catalog.get("contracts") or {}).get(ticker) or []),
+            # A fallback only needs prices for unresolved, eligible symbols. Asking
+            # for the entire universe can purchase unrelated old history or trip a
+            # budget guard before otherwise valid baselines can be used.
+            required_spot_rows = [row for row in (spot_rows if spot_rows is not None else candidate_rows)
+                                  if normalize_symbol(str(row['ticker'])) in expiry_by_ticker]
+            spot_frame = _spot_frame(spot_client, ledger, required_spot_rows, reference)
+            spots = latest_spots(spot_frame, expiry_by_ticker, close_mark)
+            baseline_symbols, selected = select_baseline_symbols(selected_catalog, spots)
+            option_frame = _option_frames(
+                option_client,
+                ledger,
+                baseline_symbols,
+                close_mark - timedelta(minutes=DEFAULT_QUOTE_LOOKBACK_MINUTES),
+                close_mark + timedelta(minutes=1, seconds=1),
+                option_symbol_chunk_size,
+                "baseline_options",
+                download_workers,
             )
-            remaining.pop(ticker, None)
+            quote_window = frame_window(
+                option_frame,
+                close_mark - timedelta(minutes=DEFAULT_QUOTE_LOOKBACK_MINUTES),
+                close_mark + timedelta(minutes=1, seconds=1),
+            )
+            pairs_by_ticker = prepare_snapshot_pairs(
+                quote_window,
+                candidate_rows,
+                {ticker: expiry for ticker, (expiry, _) in expiry_by_ticker.items()},
+            )
+            for ticker in list(remaining):
+                spot = spots.get(ticker)
+                if spot is None or ticker not in selected or ticker not in expiry_by_ticker:
+                    continue
+                expiry, expiry_status = expiry_by_ticker[ticker]
+                estimate = estimate_snapshot_from_pairs(
+                    ticker,
+                    spot,
+                    pairs_by_ticker.get(ticker, []),
+                    expiry,
+                    close_mark,
+                )
+                if estimate is None:
+                    continue
+                baselines[ticker] = Baseline(
+                    ticker=ticker,
+                    requested_reference_session=requested_reference,
+                    reference_session=reference,
+                    fallback_sessions=fallback_sessions,
+                    expiry=expiry,
+                    expiry_status=expiry_status,
+                    spot=spot,
+                    estimate=estimate,
+                    contracts=list((selected_catalog.get("contracts") or {}).get(ticker) or []),
+                )
+                remaining.pop(ticker, None)
+        except HistoricalLookbackBlocked as exc:
+            # A required baseline failure remains fatal. Only optional older
+            # fallbacks can become explicit per-ticker coverage gaps.
+            if fallback_sessions == 0:
+                raise
+            unresolved = list(remaining.values())
+            if len(unresolved) > 1:
+                # A batched miss must not hide cached fallbacks for its peers.
+                for row in unresolved:
+                    baselines.update(build_baselines(
+                        option_client, spot_client, ledger, [row],
+                        observation_session, required_sessions,
+                        spot_rows=spot_rows,
+                        max_fallback_sessions=max_fallback_sessions,
+                        option_symbol_chunk_size=option_symbol_chunk_size,
+                        download_workers=download_workers,
+                        contract_cache=contract_cache,
+                    ))
+            else:
+                print(json.dumps({"baseline_gap": {
+                    "observation_session": str(observation_session),
+                    "reference_session": str(reference),
+                    "tickers": sorted(remaining),
+                    "reason": "historical_lookback_blocked",
+                    "detail": str(exc),
+                }}), flush=True)
+            return baselines
         if remaining:
             reference = XNYS.previous_session(pd.Timestamp(reference)).date()
     return baselines
@@ -1537,6 +1567,24 @@ def process_observation_session(
         "baselines": len(baselines),
         "observations": observations,
     }
+
+
+def calibration_coverage(connection, tickers, session):
+    counts = dict(connection.execute(
+        "SELECT ticker, COUNT(*) FROM observations WHERE session_date = ? GROUP BY ticker",
+        (session.isoformat(),),
+    ).fetchall())
+    covered = sorted(set(tickers) & set(counts))
+    missing = sorted(set(tickers) - set(covered))
+    coverage = {
+        "session": session.isoformat(), "target_tickers": len(set(tickers)),
+        "observed_tickers": len(covered), "missing_tickers": missing,
+        "observations": sum(counts[ticker] for ticker in covered),
+        "minimum_coverage_fraction": 0.9,
+    }
+    if not tickers or len(covered) / len(set(tickers)) < 0.9:
+        raise RuntimeError("Target-session calibration coverage below 90%: " + json.dumps(coverage))
+    return coverage
 
 
 def build_statistics(
@@ -1878,6 +1926,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"cost=${ledger.estimated_new_cost:.4f}",
                 flush=True,
             )
+        coverage = calibration_coverage(connection, tickers, window.holdout_session)
         statistics = build_statistics(
             connection,
             tickers,
@@ -1886,6 +1935,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             include_low_reliability=args.include_low_reliability,
             first_session=window.calibration_sessions[0],
         )
+        if not statistics:
+            raise RuntimeError("Refusing to publish empty calibration statistics")
         payload = {
             **plan,
             "status": "complete",
@@ -1895,6 +1946,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "run": {
                 "completed_sessions": completed_sessions,
                 "observations_written": total_observations,
+                "target_session_coverage": coverage,
                 "cost": ledger.summary(),
             },
         }
