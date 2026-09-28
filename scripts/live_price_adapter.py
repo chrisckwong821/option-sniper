@@ -21,6 +21,8 @@ from zoneinfo import ZoneInfo
 import databento as db
 from aiohttp import WSMsgType, web
 
+from scripts.live_ingestion import IsolatedLive, close_ingestion, ingestion_health
+
 try:
     from .iv_expansion import IvExpansionTracker, option_contract_symbols, parse_occ_symbol
 except ImportError:
@@ -546,13 +548,13 @@ class DatabentoFeed:
         self.store = store
         self.replay_minutes = replay_minutes
         self.stop = stop
-        self.client: db.Live | None = None
+        self.client: IsolatedLive | None = None
 
     def connect(self) -> db.Live:
-        client = db.Live(
+        client = IsolatedLive(
             key=self.api_key,
             heartbeat_interval_s=10,
-            reconnect_policy="reconnect",
+            reconnect_policy="none",
             slow_reader_behavior="skip",
         )
         now = utc_now()
@@ -616,9 +618,8 @@ class DatabentoFeed:
             try:
                 self.client = await self.connect_without_blocking_server()
                 self.store.set_feed_status(self.config.dataset, "subscribed")
-                backoff = 1
-
                 async for record in self.client:
+                    backoff = 1
                     if self.stop.is_set():
                         self.client.stop()
                         break
@@ -689,6 +690,7 @@ class DatabentoOptionFeed:
         replan_interval_seconds: float = 60.0,
         definition_parents: list[str] | None = None,
         definition_callback: Callable[[Any], None] | None = None,
+        definition_expiry: str | None = None,
     ) -> None:
         self.api_key = api_key
         self.symbols = set(symbols)
@@ -698,9 +700,10 @@ class DatabentoOptionFeed:
         self.subscription_chunk_size = subscription_chunk_size
         self.symbol_provider = symbol_provider
         self.replan_interval_seconds = replan_interval_seconds
-        self.client: db.Live | None = None
+        self.client: IsolatedLive | None = None
         self.definition_parents = definition_parents or []
         self.definition_callback = definition_callback
+        self.definition_expiry = definition_expiry
         self.status_name = "OPRA.PILLAR.definitions" if definition_parents and not symbols else "OPRA.PILLAR"
         self.last_plan = {}
 
@@ -723,10 +726,11 @@ class DatabentoOptionFeed:
             client.subscribe(**request)
 
     def connect(self) -> db.Live:
-        client = db.Live(
+        client = IsolatedLive(
             key=self.api_key,
+            definition_expiry=self.definition_expiry,
             heartbeat_interval_s=10,
-            reconnect_policy="reconnect",
+            reconnect_policy="none",
             slow_reader_behavior="skip",
         )
         replay_start = (utc_now() - timedelta(minutes=self.replay_minutes)) if self.replay_minutes > 0 else None
@@ -822,7 +826,6 @@ class DatabentoOptionFeed:
                     "subscribed",
                     f"{len(self.symbols)} definition-backed same-expiry contracts",
                 )
-                backoff = 1
                 planner = asyncio.create_task(
                     self.refresh_subscriptions(),
                     name="option-subscription-planner",
@@ -830,6 +833,7 @@ class DatabentoOptionFeed:
                 try:
                     records_since_yield = 0
                     async for record in self.client:
+                        backoff = 1
                         records_since_yield += 1
                         if records_since_yield >= 100:
                             await asyncio.sleep(0)
@@ -1158,6 +1162,7 @@ def create_app(
         payload = store.payload("health")
         if option_runtime["feed"] is not None:
             payload["feeds"] = {**payload["feeds"], "OPRA.PILLAR": option_runtime["feed"].feed_health()}
+        payload["ingestion"] = ingestion_health()
         payload["tracked_symbols"] = len(symbols)
         payload["fixed_list_symbols"] = len(snapshot["rows"])
         payload["iv_universe_symbols"] = len(universe["rows"])
@@ -1363,6 +1368,7 @@ def create_app(
                     replay_minutes=0, stop=stop,
                     definition_parents=sorted({f"{row['ticker']}.OPT" for row in universe["rows"]}),
                     definition_callback=receive_definition,
+                    definition_expiry=live_catalog.expiry_code,
                 )
                 tasks.append(asyncio.create_task(
                     definition_feed.run(), name="feed-OPRA.PILLAR.definitions",
@@ -1394,12 +1400,17 @@ def create_app(
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        await close_ingestion()
         await asyncio.to_thread(store.save_cache)
 
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
     app.router.add_get("/", index_handler)
     app.router.add_get("/ws/prices", websocket_handler)
+    async def liveness_handler(_: web.Request) -> web.Response:
+        return web.json_response({"alive": True}, headers={"Cache-Control": "no-store"})
+
+    app.router.add_get("/api/liveness", liveness_handler)
     app.router.add_get("/api/health", health_handler)
     app.router.add_get("/api/state", state_handler)
     for asset in ("app.js", "live-calculations.js", "state-refresh.js", "styles.css",

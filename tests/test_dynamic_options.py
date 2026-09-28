@@ -80,7 +80,7 @@ class OptionMappingTests(unittest.TestCase):
 class IndependentOptionStreamsTests(unittest.TestCase):
     def test_quote_connection_does_not_replay_definitions(self):
         feed = DatabentoOptionFeed('test', ['AAPL  261002C00340000'], Mock(), 0, asyncio.Event())
-        with patch('scripts.live_price_adapter.db.Live') as live:
+        with patch('scripts.live_price_adapter.IsolatedLive') as live:
             feed.connect()
         requests = [call.kwargs for call in live.return_value.subscribe.call_args_list]
         self.assertEqual([r['schema'] for r in requests], ['cbbo-1s'])
@@ -90,7 +90,7 @@ class IndependentOptionStreamsTests(unittest.TestCase):
     def test_discovery_connection_has_separate_status_and_no_quotes(self):
         feed = DatabentoOptionFeed('test', [], Mock(), 0, asyncio.Event(),
                                    definition_parents=['AAPL.OPT'])
-        with patch('scripts.live_price_adapter.db.Live') as live:
+        with patch('scripts.live_price_adapter.IsolatedLive') as live:
             feed.connect()
         requests = [call.kwargs for call in live.return_value.subscribe.call_args_list]
         self.assertEqual([r['schema'] for r in requests], ['definition'])

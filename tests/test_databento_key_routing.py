@@ -72,7 +72,7 @@ class DatabentoKeyRoutingIntegrationTests(unittest.TestCase):
                 replay_minutes=1,
                 stop=asyncio.Event(),
             )
-            with patch("scripts.live_price_adapter.db.Live") as live_client:
+            with patch("scripts.live_price_adapter.IsolatedLive") as live_client:
                 feed.connect()
                 self.assertEqual(live_client.call_args.kwargs["key"], "live-test-key")
 
@@ -91,7 +91,7 @@ class DatabentoKeyRoutingIntegrationTests(unittest.TestCase):
                 replay_minutes=1,
                 stop=asyncio.Event(),
             )
-            with patch("scripts.live_price_adapter.db.Live") as live_client:
+            with patch("scripts.live_price_adapter.IsolatedLive") as live_client:
                 option_feed.connect()
                 self.assertEqual(
                     live_client.call_args.kwargs["key"],
@@ -115,7 +115,7 @@ class DatabentoKeyRoutingIntegrationTests(unittest.TestCase):
             afterhours = datetime(2026, 8, 28, 22, 0, tzinfo=UTC)
             with (
                 patch("scripts.live_price_adapter.utc_now", return_value=afterhours),
-                patch("scripts.live_price_adapter.db.Live") as live_client,
+                patch("scripts.live_price_adapter.IsolatedLive") as live_client,
             ):
                 feed.connect()
 
