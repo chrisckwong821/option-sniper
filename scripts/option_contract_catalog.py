@@ -278,12 +278,18 @@ def plan_option_subscriptions(
 class LiveOptionCatalog:
     """Retain only the selected expiry from the live definition stream."""
 
-    def __init__(self, rows, option_expiry):
+    def __init__(self, rows, option_expiry, cached=None):
         self.rows = rows
         self.expiry = _as_date(option_expiry)
         self.expiry_code = self.expiry.strftime("%y%m%d")
         self.roots = _root_map(rows)
-        self.symbols = set()
+        self.symbols = {
+            symbol
+            for contracts in (cached or {}).get("contracts", {}).values()
+            for pair in contracts
+            for symbol in (pair.get("call"), pair.get("put"))
+            if symbol
+        }
         self.revision = 0
 
     def update(self, raw_symbol, deleted=False):

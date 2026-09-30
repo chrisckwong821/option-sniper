@@ -60,6 +60,20 @@ class IngestionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PendingTests(unittest.TestCase):
+    def test_definition_session_discards_unused_symbol_mappings(self):
+        pending = PendingRecords(limit=2, definition_expiry='261002')
+        mapping = db.SymbolMappingMsg(
+            publisher_id=1, instrument_id=123, ts_event=1,
+            stype_in=db.SType.RAW_SYMBOL,
+            stype_in_symbol='AAPL  261002C00340000',
+            stype_out=db.SType.INSTRUMENT_ID,
+            stype_out_symbol='123', start_ts=0, end_ts=0,
+        )
+        for _ in range(100):
+            pending.add(mapping)
+        self.assertFalse(pending.overflow)
+        self.assertEqual(pending.take(), b'')
+
     def test_control_overflow_is_bounded_and_visible(self):
         pending = PendingRecords(limit=2)
         for i in range(100):

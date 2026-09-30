@@ -691,6 +691,7 @@ class DatabentoOptionFeed:
         definition_parents: list[str] | None = None,
         definition_callback: Callable[[Any], None] | None = None,
         definition_expiry: str | None = None,
+        replay_definitions: bool = True,
     ) -> None:
         self.api_key = api_key
         self.symbols = set(symbols)
@@ -704,6 +705,7 @@ class DatabentoOptionFeed:
         self.definition_parents = definition_parents or []
         self.definition_callback = definition_callback
         self.definition_expiry = definition_expiry
+        self.replay_definitions = replay_definitions
         self.status_name = "OPRA.PILLAR.definitions" if definition_parents and not symbols else "OPRA.PILLAR"
         self.last_plan = {}
 
@@ -735,8 +737,11 @@ class DatabentoOptionFeed:
         )
         replay_start = (utc_now() - timedelta(minutes=self.replay_minutes)) if self.replay_minutes > 0 else None
         if self.definition_parents:
-            client.subscribe(dataset="OPRA.PILLAR", schema="definition",
-                             symbols=self.definition_parents, stype_in="parent", start=0)
+            request = dict(dataset="OPRA.PILLAR", schema="definition",
+                           symbols=self.definition_parents, stype_in="parent")
+            if self.replay_definitions:
+                request["start"] = 0
+            client.subscribe(**request)
         self._subscribe(client, sorted(self.symbols), replay_start=replay_start)
         return client
 
@@ -1079,8 +1084,8 @@ def create_app(
         "plans": {},
     }
 
-    live_catalog = LiveOptionCatalog(universe["rows"], option_expiry)
-    catalog_revision = -1
+    live_catalog = LiveOptionCatalog(universe["rows"], option_expiry, option_catalog)
+    catalog_revision = live_catalog.revision
 
     def receive_definition(record):
         live_catalog.update(record.raw_symbol, str(record.security_update_action) == "D")
@@ -1369,6 +1374,7 @@ def create_app(
                     definition_parents=sorted({f"{row['ticker']}.OPT" for row in universe["rows"]}),
                     definition_callback=receive_definition,
                     definition_expiry=live_catalog.expiry_code,
+                    replay_definitions=option_catalog is None,
                 )
                 tasks.append(asyncio.create_task(
                     definition_feed.run(), name="feed-OPRA.PILLAR.definitions",
