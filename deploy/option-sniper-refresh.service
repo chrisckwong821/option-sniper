@@ -7,7 +7,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/opt/sigma-tape/current/deploy/refresh-production.sh
-TimeoutStartSec=3h
+TimeoutStartSec=4h
 
 [Install]
 WantedBy=multi-user.target
