@@ -97,6 +97,34 @@ class IvExpansionHistoryTests(unittest.TestCase):
             ledger.fetch_frame.assert_called_once()
             self.assertEqual(len(ledger.fetch_frame.call_args.args[2]["symbols"]), 101)
 
+    def test_definition_gateway_timeout_splits_without_losing_required_parents(self):
+        from databento.common.error import BentoServerError
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as directory:
+            rows = [{"ticker": f"T{i}"} for i in range(5)]
+            ledger = Mock()
+            ledger._path.return_value = Path(directory) / "missing.dbn.zst"
+            ledger.shared.enabled = False
+            sizes = []
+
+            def fetch(_client, _category, request):
+                sizes.append(len(request["symbols"]))
+                if len(request["symbols"]) > 2:
+                    raise BentoServerError(504)
+                return pd.DataFrame()
+
+            ledger.fetch_frame.side_effect = fetch
+            with patch('scripts.iv_expansion_history.contracts_by_expiry',
+                       side_effect=lambda _frame, group, **_kwargs: {
+                           row["ticker"]: {} for row in group
+                       }):
+                result = _contracts_for_session(
+                    Mock(), ledger, rows, date(2026, 9, 23),
+                    observation_session=date(2026, 9, 29),
+                )
+            self.assertEqual(set(result), {row["ticker"] for row in rows})
+            self.assertEqual(sizes, [5, 3, 2, 1, 2])
+
     def test_zero_budget_blocks_a_paid_request(self):
         from unittest.mock import Mock
         with tempfile.TemporaryDirectory() as directory:

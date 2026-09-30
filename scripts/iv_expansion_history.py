@@ -28,6 +28,7 @@ from typing import Any, Iterable, Sequence
 from zoneinfo import ZoneInfo
 
 import databento as db
+from databento.common.error import BentoServerError
 import exchange_calendars as xcals
 import numpy as np
 import pandas as pd
@@ -1192,16 +1193,35 @@ def _contracts_for_session(
         ledger.shared.restore_file(full_path)
     groups = [list(rows)] if full_path.exists() else chunked(rows, 100)
     contracts = {}
-    for group in groups:
-        definitions = ledger.fetch_frame(
-            option_client, "definitions", _definition_request(group, session)
-        )
+
+    def fetch_group(group: Sequence[dict[str, Any]]) -> None:
+        try:
+            definitions = ledger.fetch_frame(
+                option_client, "definitions", _definition_request(group, session)
+            )
+        except BentoServerError as exc:
+            if "504" not in str(exc) or len(group) <= 1:
+                raise
+            midpoint = (len(group) + 1) // 2
+            print(json.dumps({
+                "definition_catalog_split_after_504": {
+                    "session": str(session),
+                    "parent_count": len(group),
+                    "child_sizes": [midpoint, len(group) - midpoint],
+                }
+            }), flush=True)
+            fetch_group(group[:midpoint])
+            fetch_group(group[midpoint:])
+            return
         contracts.update(contracts_by_expiry(
             definitions,
             group,
             min_expiry=observation_session,
             max_expiry=observation_session + timedelta(days=70),
         ))
+
+    for group in groups:
+        fetch_group(group)
     if contract_cache is not None:
         # Calibration sessions are chronological, so only the active expiry
         # cycle needs to stay resident. This bounds memory while avoiding a
