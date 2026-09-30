@@ -1,6 +1,9 @@
 import json
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -66,3 +69,22 @@ class UniverseInputTests(unittest.TestCase):
             self.objects[key] = json.dumps(payload).encode()
             with self.assertRaisesRegex(SharedCacheError, "provenance"):
                 restore(self.root / "worker", self.session, screening_policy_fingerprint())
+
+    def test_overnight_yesterday_refresh_publishes_completed_universe(self):
+        from scripts.refresh_dashboard_cache import main
+
+        self.state["cache"] = {"status": "fresh", "source": "generated"}
+        state_cache = self.root / "yesterday-state.json"
+        with (
+            patch("scripts.refresh_dashboard_cache.build_refresh_plan", return_value=sample_plan()),
+            patch("scripts.refresh_dashboard_cache.DashboardStateManager") as manager,
+            patch("scripts.universe_input.SharedCache", return_value=self.shared),
+            patch.object(sys, "argv", ["refresh_dashboard_cache", "--state-cache", str(state_cache)]),
+            redirect_stdout(StringIO()),
+        ):
+            manager.return_value.ensure_state.return_value = self.state
+            main()
+
+        payload = json.loads(self.objects[f"universe/{self.session}.json"])
+        self.assertEqual(payload["completed_session"], self.session)
+        self.assertEqual(payload["state"], self.state)

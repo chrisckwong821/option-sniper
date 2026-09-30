@@ -54,9 +54,10 @@ def main() -> None:
     cache = state["cache"]
     if cache["source"] == "cache-fallback":
         raise RuntimeError(cache["last_refresh_error"] or "Dashboard refresh failed")
-    # Only the canonical completed-session cache feeds the dedicated worker.
-    # Yesterday-only snapshots have a different purpose and key lifecycle.
-    if args.state_cache.name == DEFAULT_STATE_CACHE.name:
+    # The overnight Yesterday refresh already validates the full completed-
+    # session bundle. Publish that universe for referral2 before pre-market;
+    # the serving adapter still loads its own canonical cache on schedule.
+    if args.state_cache.name in {DEFAULT_STATE_CACHE.name, "yesterday-state.json"}:
         universe_key = publish_universe(args.state_cache.parent, state)
     else:
         universe_key = None
