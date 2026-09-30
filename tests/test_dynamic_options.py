@@ -6,6 +6,17 @@ from scripts.option_contract_catalog import LiveOptionCatalog
 
 
 class LiveCatalogTests(unittest.TestCase):
+    def test_cached_pairs_survive_incremental_definition_updates(self):
+        call, put = 'TSEM  260911C00200000', 'TSEM  260911P00200000'
+        cached = {'contracts': {'TSEM': [{'call': call, 'put': put}]}}
+        catalog = LiveOptionCatalog([{'ticker': 'TSEM'}], '2026-09-11', cached)
+        self.assertEqual(catalog.revision, 0)
+        self.assertEqual(len(catalog.payload()['contracts']['TSEM']), 1)
+        catalog.update('TSEM  260911C00202500')
+        self.assertEqual(len(catalog.payload()['contracts']['TSEM']), 1)
+        catalog.update(put, deleted=True)
+        self.assertEqual(catalog.payload()['contracts'], {})
+
     def test_retains_only_listed_pairs_for_requested_expiry_and_roots(self):
         catalog = LiveOptionCatalog([{'ticker': 'TSEM'}], '2026-09-11')
         call, put = 'TSEM  260911C00200000', 'TSEM  260911P00200000'
@@ -96,6 +107,15 @@ class IndependentOptionStreamsTests(unittest.TestCase):
         self.assertEqual([r['schema'] for r in requests], ['definition'])
         self.assertEqual(requests[0]['start'], 0)
         self.assertEqual(feed.status_name, 'OPRA.PILLAR.definitions')
+
+    def test_cached_discovery_receives_only_new_definitions(self):
+        feed = DatabentoOptionFeed('test', [], Mock(), 0, asyncio.Event(),
+                                   definition_parents=['AAPL.OPT'], replay_definitions=False)
+        with patch('scripts.live_price_adapter.IsolatedLive') as live:
+            feed.connect()
+        request = live.return_value.subscribe.call_args.kwargs
+        self.assertEqual(request['schema'], 'definition')
+        self.assertNotIn('start', request)
 
 
 class StartupReplayTests(unittest.TestCase):
