@@ -23,6 +23,11 @@ class PendingRecords:
         self.overflow = False
 
     def add(self, record):
+        # The definition-only session never resolves quote instrument IDs. Parent
+        # subscriptions can send mappings for every expiry, overwhelming its queue.
+        if self.definition_expiry and isinstance(record, db.SymbolMappingMsg):
+            self.last_record = time.monotonic()
+            return
         if isinstance(record, db.InstrumentDefMsg) and self.definition_expiry:
             if str(record.raw_symbol)[6:12] != self.definition_expiry:
                 self.last_record = time.monotonic()
