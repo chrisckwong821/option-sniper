@@ -111,7 +111,7 @@ class StartupRoundtripTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 startup_history.ensure_bucket_statistics(self.source, self.state, allow_download=True)
             self.assertEqual(run.call_args.kwargs['env']['SIGMA_RECONSTRUCTION_MAX_COST'], '5')
-            self.assertEqual(run.call_args.kwargs['timeout'], 900)
+            self.assertEqual(run.call_args.kwargs['timeout'], 3600)
 
     def test_archive_excludes_secrets_and_marks_damaged_history(self):
         raw = self.source / 'iv-expansion-history/raw/spot/2026-08-27'

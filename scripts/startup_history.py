@@ -7,6 +7,9 @@ from pathlib import Path
 from .shared_cache import SharedCache
 
 
+BUCKET_RECONSTRUCTION_TIMEOUT_SECONDS = 3600
+
+
 def ensure_bucket_statistics(root, state, allow_download=True, *, ticker_source=None):
     root = Path(root).resolve()
     if not SharedCache(root).enabled:
@@ -50,7 +53,8 @@ def ensure_bucket_statistics(root, state, allow_download=True, *, ticker_source=
         env['SIGMA_RECONSTRUCTION_MAX_COST'] = '0'
     with (root / 'bucket-reconstruction.log').open('w') as output:
         result = subprocess.run(command, cwd=Path(__file__).resolve().parents[1], env=env,
-                                stdout=output, stderr=subprocess.STDOUT, check=False, timeout=900)
+                                stdout=output, stderr=subprocess.STDOUT, check=False,
+                                timeout=BUCKET_RECONSTRUCTION_TIMEOUT_SECONDS)
     if result.returncode:
         raise RuntimeError('Bucket reconstruction failed; see bucket-reconstruction.log. No further download fallback was attempted.')
     from .computed_cache import publish
