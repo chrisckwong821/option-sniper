@@ -59,11 +59,13 @@ run succeeds, the retry sees the current cache and exits without downloading
 data. A failed Databento refresh leaves the running service and prior cache
 untouched.
 
-`option-sniper-yesterday-refresh.timer` separately runs at 20:20 ET Monday through
-Friday, with a retry at 20:40, after the final EQUS.SUMMARY daily publication.
-These are 08:20/08:40 UTC+8 the following morning during U.S. daylight saving time
-and 09:20/09:40 during standard time. Completion depends on provider availability
-and processing time. It calls `refresh-production.sh yesterday`, writes
+`option-sniper-yesterday-refresh.timer` separately retries at 00:30, 01:30,
+02:30, and 03:10 ET Tuesday through Saturday, after each preceding U.S. trading
+day. The historical EQUS.SUMMARY key has rejected requests at 20:20 ET even
+though the final daily bar has been published. These later retries leave room
+for its historical-access window to open before the pre-market refresh.
+Completion still depends on provider availability and processing time. It calls
+`refresh-production.sh yesterday`, writes
 `/var/lib/sigma-tape/yesterday-state.json`, and recreates only the backend. The
 adapter overlays only the saved gainer snapshot when its date is at least as
 recent and its screening policy matches. Today's cached universe and alert cycle
