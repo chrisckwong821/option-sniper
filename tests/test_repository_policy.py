@@ -147,8 +147,9 @@ class RepositoryPolicyTests(unittest.TestCase):
         timer = (ROOT / "deploy/option-sniper-yesterday-refresh.timer").read_text()
         service = (ROOT / "deploy/option-sniper-yesterday-refresh.service").read_text()
         refresh = (ROOT / "deploy/refresh-production.sh").read_text()
-        self.assertIn("OnCalendar=Mon..Fri *-*-* 20:20:00 America/New_York", timer)
-        self.assertIn("OnCalendar=Mon..Fri *-*-* 20:40:00 America/New_York", timer)
+        for time in ("00:30", "01:30", "02:30", "03:10"):
+            self.assertIn(f"OnCalendar=Tue..Sat *-*-* {time}:00 America/New_York", timer)
+        self.assertNotIn("20:20:00 America/New_York", timer)
         self.assertIn("refresh-production.sh yesterday", service)
         self.assertIn('cache_name="yesterday-state.json"', refresh)
         self.assertIn("services=(backend)", refresh)
