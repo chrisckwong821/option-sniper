@@ -1,8 +1,12 @@
+import json
 import math
 import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+
+from aiohttp import WSMsgType
 
 from scripts.discord_zscore_alert import (
     AlertEngine,
@@ -14,6 +18,7 @@ from scripts.discord_zscore_alert import (
     alert_cycle_date_at,
     build_universe,
     calculate_z_score,
+    consume_stream,
     websocket_url,
 )
 
@@ -62,10 +67,31 @@ class AlertCycleTests(unittest.TestCase):
     def test_universe_uses_next_market_session(self):
         universe = build_universe({
             "refresh_plan": {"next_session": "2026-08-28"},
-            "today": {"rows": [{"ticker": "AAA"}]},
+            "expected_sigma": {"effective_session": "2026-08-28", "iv_session": "2026-08-27"},
+            "today": {"rows": [{"ticker": "AAA", "expected_sigma_status": "fresh",
+                                "expected_sigma_session": "2026-08-28",
+                                "return_anchor_date": "2026-08-27",
+                                "return_anchor_price": 100, "live_anchor_price": 100,
+                                "sigma_1d_pct": 2}]},
         })
         self.assertEqual(universe.target_session, "2026-08-28")
         self.assertEqual(list(universe.rows), ["AAA"])
+
+    def test_prior_close_is_required_before_premarket_alerts(self):
+        payload = {
+            "refresh_plan": {"next_session": "2026-10-02"},
+            "expected_sigma": {"effective_session": "2026-10-02", "iv_session": "2026-10-01"},
+            "today": {"rows": [{"ticker": "AAOI", "expected_sigma_status": "fresh",
+                                "expected_sigma_session": "2026-10-02",
+                                "return_anchor_date": "2026-09-30",
+                                "return_anchor_price": 99.26, "live_anchor_price": 99.26,
+                                "sigma_1d_pct": 4.38}]},
+        }
+        self.assertEqual(build_universe(payload).rows, {})
+        row = payload["today"]["rows"][0]
+        row.update(return_anchor_date="2026-10-01", return_anchor_price=107.32,
+                   live_anchor_price=107.32, sigma_1d_pct=4.494405011)
+        self.assertIn("AAOI", build_universe(payload).rows)
 
 
 class AlertEngineTests(unittest.IsolatedAsyncioTestCase):
@@ -110,6 +136,28 @@ class AlertEngineTests(unittest.IsolatedAsyncioTestCase):
     async def test_old_threshold_no_longer_alerts(self):
         self.assertEqual(await self.process(price_point("AAA", 1.2, "2026-08-28T12:00:00+00:00")), 0)
         self.assertEqual(self.sent, [])
+
+    async def test_reference_refresh_recalculates_premarket_price(self):
+        old = AlertUniverse("2026-08-28", {})
+        ready = self.universe
+        class Socket:
+            def __init__(self):
+                self.messages = [
+                    SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps({
+                        "type": "snapshot", "prices": [
+                            {"ticker": "AAA", "price": 100.5,
+                             "ts_event": "2026-08-28T12:01:00+00:00",
+                             "session": "premarket", "is_stale": False},
+                            price_point("BBB", 1.6, "2026-08-28T12:01:00+00:00"),
+                        ]})),
+                    SimpleNamespace(type=WSMsgType.CLOSED, data=""),
+                ]
+            async def receive(self, timeout):
+                return self.messages.pop(0)
+        async def load(): return ready
+        await consume_stream(Socket(), self.engine, load, old,
+                             refresh_seconds=0, monotonic=lambda: 0)
+        self.assertEqual([item[0].ticker for item in self.sent], ["BBB"])
 
     async def test_fresh_snapshot_alerts_every_ticker_already_above_threshold(self):
         sent = await self.engine.process_message(

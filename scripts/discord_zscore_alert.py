@@ -10,6 +10,7 @@ import json
 import math
 import os
 import sqlite3
+import time as clock_time
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
@@ -29,6 +30,7 @@ DEFAULT_DISCORD_API = "https://discord.com/api/v10"
 DEFAULT_DISCORD_CHANNEL_ID = "1544929277009465374"
 DEFAULT_THRESHOLD = 1.5
 Z_SCORE_EPSILON = 1e-9
+REFERENCE_REFRESH_SECONDS = 30
 
 
 def ensure_aware(value: datetime) -> datetime:
@@ -73,16 +75,39 @@ class AlertUniverse:
 
 def build_universe(payload: dict[str, Any]) -> AlertUniverse:
     target_session = str(payload.get("refresh_plan", {}).get("next_session") or "")
+    plan = payload.get("expected_sigma") or {}
+    iv_session = str(plan.get("iv_session") or "")
+    effective_session = str(plan.get("effective_session") or "")
     rows = {
         str(row["ticker"]): row
         for row in payload.get("today", {}).get("rows", [])
         if row.get("ticker")
+        and effective_session == target_session
+        and iv_session
+        and row.get("expected_sigma_status") == "fresh"
+        and row.get("expected_sigma_session") == target_session
+        and row.get("return_anchor_date") == iv_session
+        and _positive_number(row.get("return_anchor_price"))
+        and _positive_number(row.get("sigma_1d_pct"))
+        and _same_number(row.get("live_anchor_price"), row.get("return_anchor_price"))
     }
     if not target_session:
         raise ValueError("Dashboard state is missing refresh_plan.next_session")
-    if not rows:
-        raise ValueError("Dashboard state has no live-universe rows")
     return AlertUniverse(target_session=target_session, rows=rows)
+
+
+def _positive_number(value: Any) -> bool:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(number) and number > 0
+
+
+def _same_number(left: Any, right: Any) -> bool:
+    return _positive_number(left) and _positive_number(right) and math.isclose(
+        float(left), float(right), rel_tol=1e-9, abs_tol=1e-9,
+    )
 
 
 @dataclass(frozen=True)
@@ -466,6 +491,39 @@ async def load_state(session: ClientSession, backend_url: str) -> AlertUniverse:
         return build_universe(await response.json())
 
 
+async def consume_stream(socket, engine: AlertEngine, load_reference, universe: AlertUniverse,
+                         *, refresh_seconds: float = REFERENCE_REFRESH_SECONDS,
+                         monotonic=clock_time.monotonic) -> None:
+    """Refresh the same /api/state reference used by the production dashboard."""
+    next_refresh = monotonic() + refresh_seconds
+    while True:
+        try:
+            message = await socket.receive(timeout=max(0.1, next_refresh - monotonic()))
+        except asyncio.TimeoutError:
+            message = None
+        if monotonic() >= next_refresh:
+            try:
+                updated = await load_reference()
+            except Exception as exc:
+                updated = AlertUniverse(universe.target_session, {})
+                print(json.dumps({"event": "alert_reference_unavailable",
+                                  "error_type": type(exc).__name__}), flush=True)
+            if updated != universe:
+                engine.previous_z.clear()
+                universe = updated
+                print(json.dumps({"event": "alert_reference_refreshed",
+                                  "target_session": universe.target_session,
+                                  "tracked_symbols": len(universe.rows)}), flush=True)
+            next_refresh = monotonic() + refresh_seconds
+        if message is None:
+            continue
+        if message.type == WSMsgType.TEXT:
+            if universe.rows:
+                await engine.process_message(json.loads(message.data), universe)
+        elif message.type in {WSMsgType.ERROR, WSMsgType.CLOSE, WSMsgType.CLOSED}:
+            break
+
+
 async def run(config: Config) -> None:
     store = AlertStore(config.database)
     timeout = ClientTimeout(total=20, connect=10, sock_read=60)
@@ -498,11 +556,8 @@ async def run(config: Config) -> None:
                         receive_timeout=90,
                     ) as socket:
                         backoff = 1
-                        async for message in socket:
-                            if message.type == WSMsgType.TEXT:
-                                await engine.process_message(json.loads(message.data), universe)
-                            elif message.type in {WSMsgType.ERROR, WSMsgType.CLOSE}:
-                                break
+                        await consume_stream(socket, engine,
+                            lambda: load_state(session, config.backend_url), universe)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
